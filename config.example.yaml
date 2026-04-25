@@ -22,9 +22,9 @@ llm:
     num_predict: 12000
   fallback:
     type: openai_compat
-    base_url: ""          # OpenCode endpoint (OpenAI-compatible)
-    api_key: ""
-    model: ""             # pick a fast cheap one in OpenCode
+    base_url: https://opencode.ai/zen/go/v1   # OpenCode Go (OpenAI-compatible)
+    api_key: ""                               # OpenCode Go key (sk-...)
+    model: kimi-k2.6                          # if 404, try opencode-go/kimi-k2.6
     timeout_s: 90
     num_predict: 8000
 

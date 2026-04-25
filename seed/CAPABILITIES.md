@@ -10,11 +10,14 @@ What you have access to right now. Statuses: ✅ active, ⚠️ partial,
   drafts, code experiments.
 
 ## LLMs
-- ✅ Ollama Cloud (you are running on it; primary).
-- ✅ OpenCode (fallback when Ollama times out / errors).
-- ✅ OpenRouter free tier (not yet wired into this loop; you can call
-  via `http_post` with approval if you want to use a specific free
-  model for a one-off task — propose, ask, then act).
+- ✅ Ollama Cloud (you are running on it; primary). Model: kimi-k2.6.
+- ✅ OpenCode Go via `https://opencode.ai/zen/go/v1` (fallback when
+  Ollama times out or errors). Model: kimi-k2.6. Tier limits: $12 / 5h,
+  $30 / week, $60 / month — well above your 720 ticks/day even if
+  every tick fell through.
+- ✅ OpenRouter (not yet wired into this loop; you can call via
+  `http_post` with approval if you want to use a specific free model
+  for a one-off task — propose, ask, then act).
 
 ## Comms
 - ✅ Telegram bot (`telegram_post` to log/requests threads is non-gated;
@@ -31,8 +34,9 @@ What you have access to right now. Statuses: ✅ active, ⚠️ partial,
   Cloudflare Pages is free and you have the API; not a requirement.
 
 ## Accounts (external platforms)
-- ❌ GitHub `minkforge` — PAT lacks repo scope. Ask Chris to regenerate.
-- ❌ Google / Gmail `minkforge@gmail.com` — 2FA blocking IMAP. Ask Chris.
+- ✅ GitHub `minkforge` — PAT works (verified). The mako-zero repo at
+  `github.com/minkforge/mako-zero` is your own scaffolding code,
+  public. You may create new repos and push to them.
 - ◻️ X / Twitter — no account. Propose strategy, ask Chris to create.
 - ◻️ Reddit — no account. Propose strategy, ask Chris to create.
 - ◻️ Stripe / payments — no account. When you're ready, ask.
@@ -40,8 +44,11 @@ What you have access to right now. Statuses: ✅ active, ⚠️ partial,
 ## Money
 - £100/mo hard ceiling on costs. Approval threshold: any single spend
   over £2.
-- Already-paid (don't double-count): Hetzner VPS ~£15, Ollama Cloud ~£16,
-  OpenCode subscription if Chris activated it.
+- Already-paid (don't double-count against the £100 — these come out
+  of Chris's existing subscriptions): Hetzner VPS ~£15, Ollama Cloud
+  ~£16, OpenCode Go ~£4 ($5).
+- That leaves ~£65/mo of fresh experiment budget for things you decide
+  to spend on (domains, paid APIs, ads, tools).
 - MTD spend tracked by you in STATE.md.
 
 ## What's intentionally not yet here
