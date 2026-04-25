@@ -159,6 +159,34 @@ def archive_inbox(paths: Paths, snap: dict | None) -> None:
         pass
 
 
+def list_drafts(paths: Paths, limit: int = 12) -> str:
+    """Summary of state/outbox/blog/drafts/ for hot context — filename + first heading."""
+    drafts_dir = paths.state / "outbox" / "blog" / "drafts"
+    if not drafts_dir.exists():
+        return "(no drafts yet — scribe hasn't written anything)"
+    files = sorted(drafts_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
+    if not files:
+        return "(no drafts yet — scribe hasn't written anything)"
+    lines = []
+    for p in files:
+        head = ""
+        try:
+            for line in p.read_text(encoding="utf-8").splitlines():
+                s = line.strip()
+                if s.startswith("---") or not s:
+                    continue
+                if s.startswith("title:"):
+                    head = s.split(":", 1)[1].strip().strip('"').strip("'")[:80]
+                    break
+                if s.startswith("#"):
+                    head = s.lstrip("#").strip()[:80]
+                    break
+        except OSError:
+            pass
+        lines.append(f"- {p.name}{(' — ' + head) if head else ''}")
+    return "\n".join(lines)
+
+
 def assemble_hot_context(cfg: dict, paths: Paths, requested_notes: list[str],
                          inbox_snap: dict | None) -> tuple[str, dict]:
     """Build the user-message hot context block. Returns (text, sizes)."""
@@ -179,6 +207,8 @@ def assemble_hot_context(cfg: dict, paths: Paths, requested_notes: list[str],
     add("JOURNAL.md (last %d lines)" % cfg["context"]["recent_journal_lines"],
         tail_lines(paths.state / "JOURNAL.md", cfg["context"]["recent_journal_lines"]))
     add("notes/INDEX.md", read_text(paths.notes / "INDEX.md"))
+    add("outbox/blog/drafts/ (scribe's drafts — read full text via read_file before publishing)",
+        list_drafts(paths))
     add("LAST_RESULTS.md", read_text(paths.state / "LAST_RESULTS.md"))
     add("PERSONA.md", read_text(paths.state / "PERSONA.md"))
 

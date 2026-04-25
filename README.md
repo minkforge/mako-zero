@@ -59,7 +59,7 @@ runs as root by design — the box is his.
 the worker and the scribe sequentially in one process. No overlap by
 construction — only one subprocess fires at a time.
 
-### Worker tick (`tick.py`, ~60s cadence)
+### Worker tick (`tick.py`, ~5 min cadence)
 
 1. If `state/compact_pending.flag` exists → compaction mode, else normal.
 2. Assemble hot context (~7K tokens) plus up to 3 notes files Mako
@@ -75,7 +75,7 @@ construction — only one subprocess fires at a time.
 10. Append a row to `logs/metrics.csv` AND a full payload to
     `logs/ticks/<NNNNNNNN>.json`.
 
-### Scribe run (`scribe.py`, ~30 min cadence)
+### Scribe run (`scribe.py`, ~2h cadence)
 
 1. Read MISSION, PERSONA, last 100 journal lines, notes index, recent
    notes, and the existing blog drafts in the outbox.
@@ -153,8 +153,8 @@ tuning, model evaluation). The summary stats remain in
 something weird happens.
 
 Storage is ~50–100KB per tick + similar per scribe run. Roughly
-40MB/day at default cadence. Disable via `logging.full_payload: false`
-in config, or rotate manually:
+~15MB/day at default cadence (5-min ticks, 2h scribe). Disable via
+`logging.full_payload: false` in config, or rotate manually:
 
 ```bash
 find /srv/mako-zero/logs/ticks  -mtime +14 -delete
@@ -255,7 +255,10 @@ journalctl -u mako-zero -f
 Within ~5s you should see:
 
 ```
-[supervisor] starting (tick every 60s, digest at 08:00 local)
+[supervisor] starting
+[supervisor]   tick every 300s
+[supervisor]   scribe every 7200s (on)
+[supervisor]   digest at 08:00 local
 [supervisor] tick(normal): start ...
 [supervisor] tick(normal): done rc=0 in N.Ns
 ```

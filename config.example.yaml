@@ -55,11 +55,11 @@ digest:
   hours_window: 24             # how far back to summarise
 
 supervisor:
-  tick_interval_s: 60          # gap between END of one tick and START of next
+  tick_interval_s: 300         # 5 min — gap between END of one tick and START of next
   digest_hour_local: 8
   tick_timeout_s: 300          # hard ceiling per tick subprocess
   digest_timeout_s: 60
-  scribe_interval_s: 1800      # scribe runs every 30 min, between worker ticks
+  scribe_interval_s: 7200      # 2 hours — scribe runs between worker ticks
   scribe_timeout_s: 240        # writing-heavy, can be slower than worker tick
 
 scribe:

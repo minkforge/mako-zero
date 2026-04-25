@@ -53,28 +53,6 @@ def recent_notes(paths: t.Paths, n: int = 3) -> list[Path]:
     return files[:n]
 
 
-def existing_drafts_summary(outbox_drafts: Path) -> str:
-    if not outbox_drafts.exists():
-        return "(no drafts yet)"
-    drafts = sorted(outbox_drafts.glob("*.md"))[-10:]
-    if not drafts:
-        return "(no drafts yet)"
-    lines = []
-    for p in drafts:
-        head = ""
-        try:
-            with p.open() as f:
-                for line in f:
-                    s = line.strip()
-                    if s.startswith("#"):
-                        head = s.lstrip("#").strip()[:80]
-                        break
-        except OSError:
-            pass
-        lines.append(f"- {p.name}{(' — ' + head) if head else ''}")
-    return "\n".join(lines)
-
-
 def assemble_scribe_context(cfg: dict, paths: t.Paths) -> tuple[str, dict]:
     parts: list[tuple[str, str]] = []
     sizes: dict[str, int] = {}
@@ -95,8 +73,7 @@ def assemble_scribe_context(cfg: dict, paths: t.Paths) -> tuple[str, dict]:
     for nf in recent_notes(paths, 3):
         add(f"notes/{nf.name}", t.read_text(nf))
 
-    drafts_dir = paths.state / "outbox" / "blog" / "drafts"
-    add("existing drafts in outbox/blog/drafts/", existing_drafts_summary(drafts_dir))
+    add("existing drafts in outbox/blog/drafts/", t.list_drafts(paths))
 
     blocks = [f"## {label}\n\n{content.rstrip()}\n" for label, content in parts]
     text = "\n".join(blocks)
