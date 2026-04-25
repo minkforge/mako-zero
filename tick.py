@@ -578,6 +578,103 @@ def _gated_summary(qid: str, action: dict) -> str:
     return "\n".join(lines)
 
 
+def exec_email_send(cfg: dict, action: dict) -> dict:
+    """SMTP via Fastmail (or any SMTP_SSL host configured)."""
+    import smtplib
+    from email.message import EmailMessage
+    fm = cfg.get("fastmail", {})
+    if not fm.get("smtp_password"):
+        return {"ok": False, "error": "fastmail.smtp_password not configured"}
+    to = action.get("to")
+    if not to:
+        return {"ok": False, "error": "missing 'to'"}
+    msg = EmailMessage()
+    msg["From"] = fm.get("from") or fm.get("user", "")
+    msg["To"] = to
+    msg["Subject"] = action.get("subject", "(no subject)")
+    msg.set_content(action.get("body", ""))
+    try:
+        with smtplib.SMTP_SSL(fm.get("smtp_host", "smtp.fastmail.com"),
+                              fm.get("smtp_port", 465), timeout=30) as s:
+            s.login(fm.get("user") or fm.get("from", ""), fm["smtp_password"])
+            s.send_message(msg)
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:300]}"}
+    return {"ok": True, "to": to, "subject": msg["Subject"]}
+
+
+def exec_cf_api(cfg: dict, action: dict) -> dict:
+    """Cloudflare API call. action.method, action.path (under /client/v4), action.body."""
+    cf = cfg.get("cloudflare", {})
+    if not cf.get("token"):
+        return {"ok": False, "error": "cloudflare.token not configured"}
+    method = str(action.get("method", "GET")).upper()
+    path = str(action.get("path", "/"))
+    if not path.startswith("/"):
+        path = "/" + path
+    url = f"https://api.cloudflare.com/client/v4{path}"
+    headers = {"Authorization": f"Bearer {cf['token']}", "Content-Type": "application/json"}
+    body = action.get("body")
+    try:
+        r = requests.request(method, url, headers=headers,
+                             json=body if body is not None else None, timeout=30)
+    except requests.RequestException as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:300]}"}
+    return {"ok": r.status_code < 400, "status": r.status_code,
+            "body": r.text[:1500]}
+
+
+def exec_http_mutating(action: dict) -> dict:
+    """http_post / http_put / http_delete via requests."""
+    t = str(action.get("type", "http_post"))
+    method = t.replace("http_", "").upper()
+    url = action.get("url")
+    if not url:
+        return {"ok": False, "error": "missing 'url'"}
+    body = action.get("body")
+    headers = action.get("headers") or {}
+    kwargs: dict = {"headers": headers, "timeout": 30}
+    if isinstance(body, (dict, list)):
+        kwargs["json"] = body
+    elif isinstance(body, str):
+        kwargs["data"] = body
+    try:
+        r = requests.request(method, url, **kwargs)
+    except requests.RequestException as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:300]}"}
+    return {"ok": r.status_code < 400, "status": r.status_code,
+            "body": r.text[:1500]}
+
+
+def exec_spend(paths: Paths, action: dict) -> dict:
+    """Append to state/spend.jsonl — simple ledger; STATE.md still tracks MTD."""
+    rec = {
+        "ts": now_iso(),
+        "amount_pence": int(action.get("amount_pence", 0) or 0),
+        "reason": str(action.get("reason", ""))[:300],
+    }
+    p = paths.state / "spend.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    return {"ok": True, "amount_pence": rec["amount_pence"], "reason": rec["reason"]}
+
+
+def execute_gated_action(cfg: dict, paths: Paths, action: dict) -> dict:
+    """Run a gated action (called by the listener after approval).
+    Single dispatch for all gated types."""
+    t = str(action.get("type", ""))
+    if t == "email_send":
+        return exec_email_send(cfg, action)
+    if t == "cf_api":
+        return exec_cf_api(cfg, action)
+    if t in ("http_post", "http_put", "http_delete"):
+        return exec_http_mutating(action)
+    if t == "spend":
+        return exec_spend(paths, action)
+    return {"ok": False, "error": f"no gated executor for {t!r}"}
+
+
 def queue_gated_action(cfg: dict, paths: Paths, action: dict) -> dict:
     qid = f"q{int(time.time()*1000)}"
     rec = {"id": qid, "queued_at": now_iso(), "action": action}

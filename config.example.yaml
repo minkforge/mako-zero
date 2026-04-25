@@ -54,6 +54,21 @@ telegram:
   approvals_thread_id: 0       # set to a real id once the topic exists
   digest_thread_id: 0          # daily digest goes here; falls back to log_thread
 
+# Used when an `email_send` gated action is approved via Telegram reply.
+# If left blank, approve→email won't work; the action will return an error.
+fastmail:
+  smtp_host: smtp.fastmail.com
+  smtp_port: 465
+  user: ""                     # mako@minkforge.com
+  from: ""                     # usually same as user
+  smtp_password: ""            # Fastmail app password
+
+# Used when a `cf_api` gated action is approved via Telegram reply.
+# If left blank, approve→cf_api won't work; the action will return an error.
+cloudflare:
+  token: ""
+  account_id: ""
+
 digest:
   enabled: true
   hours_window: 24             # how far back to summarise

@@ -40,6 +40,19 @@ What you have access to right now. Statuses: ✅ active, ⚠️ partial,
   your next tick under the prominent INBOX block, formatted as
   `[telegram · thread N · HH:MM (reply to: "...")]`. The reply-to
   context tells you which question the answer is responding to.
+- ✅ **Gated actions can be approved via Telegram reply.** When you
+  emit an action with `needs_approval: true`, the listener posts a
+  `⏸ qN · <type> · NEEDS APPROVAL` summary. If Chris replies to that
+  message with "approve" / "yes" / "ok" / "ship" (or "reject" /
+  "no" / "kill", optionally with a reason), the listener executes
+  (or rejects) the action immediately and posts the result back in
+  Telegram. You see the outcome in `state/INBOX.md` next tick as
+  `[approval · qN · <type>] ✅ executed` (or `❎ rejected`) with the
+  full action body and result, so you can adapt without re-emitting.
+  Available executors: `email_send` (Fastmail SMTP), `cf_api`
+  (Cloudflare), `http_post|put|delete` (generic), `spend` (ledger).
+  All require credentials populated in `config.yaml` — Chris owns
+  that, and a misconfigured executor returns a clear error.
 - ⚠️ Fastmail mako@minkforge.com — `email_send` is approval-gated.
 - ◻️ UK-residential Chrome session via Chris's Mac — request via
   `ask_chris reason: browse via UK IP`.
