@@ -189,7 +189,7 @@ Single JSON object inside a ```json fence. No prose outside the fence.
     {"type": "email_send", "to": "x@y.com", "subject": "...", "body": "...", "needs_approval": true, "spend": {"amount_pence": 0, "reason": "outreach"}}
   ],
   "request_notes": ["notes/foo.md", "notes/bar.md"],
-  "telegram": "≤300 char Log thread post for this tick",
+  "telegram": "≤1000 char Log thread post for this tick (aim for 200-500 — short is better, but never cut yourself off mid-thought; the wrapper will mark anything over 1000 as truncated)",
   "compact_now": false,
   "drift_flag": null
 }

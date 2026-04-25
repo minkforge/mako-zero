@@ -41,6 +41,10 @@ tick:
   compact_every_n_ticks: 50
   approval_threshold_pence: 200
   budget_ceiling_pence_month: 10000  # £100/mo
+  telegram_summary_max_chars: 1000   # per-tick Telegram log message cap
+                                     # (Telegram itself caps at 4096; this is
+                                     #  our soft cap so blow-by-blows stay punchy.
+                                     #  Bump for verbose runs, lower for quieter.)
 
 telegram:
   bot_token: ""

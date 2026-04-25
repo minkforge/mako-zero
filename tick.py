@@ -878,7 +878,9 @@ def main() -> int:
 
         # --- telegram ---
         tg_text = (obj.get("telegram") or "").strip() or wd
-        tg_text = tg_text[:300]
+        tg_cap = int(cfg.get("tick", {}).get("telegram_summary_max_chars", 1000))
+        if len(tg_text) > tg_cap:
+            tg_text = tg_text[:tg_cap - 30].rstrip() + f" …[truncated · {len(tg_text)} chars]"
         wall = round(time.time() - t_start, 2)
         header = (f"🦫 #{tick_n} · {datetime.now().strftime('%H:%M')} · "
                   f"{wall}s · {meta.get('slot','?')}/{meta.get('model','?')}\n")
