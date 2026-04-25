@@ -565,7 +565,8 @@ def _gated_summary(qid: str, action: dict) -> str:
         lines.append(f"{t.upper()} {action.get('url','?')}")
         b = action.get("body")
         if b is not None:
-            lines.append(f"body: {json.dumps(b) if not isinstance(b,str) else b[:200]}")
+            body_str = b if isinstance(b, str) else json.dumps(b, ensure_ascii=False)
+            lines.append(f"body: {body_str[:300]}")
     elif t == "spend":
         lines.append(f"£{action.get('amount_pence',0)/100:.2f} — {action.get('reason','?')}")
     if action.get("spend"):
@@ -656,6 +657,10 @@ def append_journal(paths: Paths, tick_n: int, work_done: str) -> None:
 
 # --------------------------- telegram ----------------------------------
 
+TELEGRAM_HARD_LIMIT = 4096   # Telegram sendMessage cap (chars, UTF-16 code units in practice)
+TELEGRAM_SAFE_LIMIT = 4000   # leave headroom for emoji / multi-byte
+
+
 def telegram_send(cfg: dict, text: str, thread_id: int | None = None, label: str = "") -> dict:
     tok = cfg["telegram"]["bot_token"]
     chat = cfg["telegram"]["chat_id"]
@@ -664,16 +669,26 @@ def telegram_send(cfg: dict, text: str, thread_id: int | None = None, label: str
     if thread_id is None:
         thread_id = cfg["telegram"]["log_thread_id"]
     url = f"https://api.telegram.org/bot{tok}/sendMessage"
-    payload: dict[str, Any] = {"chat_id": chat, "text": text[:4000]}
+
+    truncated = False
+    original_len = len(text)
+    if original_len > TELEGRAM_SAFE_LIMIT:
+        marker = f"\n\n…[truncated · {original_len} chars total · see logs/ticks/<n>.json]"
+        text = text[:TELEGRAM_SAFE_LIMIT - len(marker)] + marker
+        truncated = True
+
+    payload: dict[str, Any] = {"chat_id": chat, "text": text}
     if thread_id:
         payload["message_thread_id"] = int(thread_id)
     try:
         r = requests.post(url, json=payload, timeout=10)
     except requests.RequestException as e:
-        return {"ok": False, "error": str(e)[:200], "label": label}
+        return {"ok": False, "error": str(e)[:200], "label": label, "truncated": truncated}
     if r.status_code != 200:
-        return {"ok": False, "status": r.status_code, "body": r.text[:300], "label": label}
-    return {"ok": True, "label": label}
+        return {"ok": False, "status": r.status_code, "body": r.text[:300],
+                "label": label, "truncated": truncated, "original_len": original_len}
+    return {"ok": True, "label": label, "truncated": truncated, "sent_len": len(text),
+            "original_len": original_len}
 
 
 # --------------------------- metrics -----------------------------------

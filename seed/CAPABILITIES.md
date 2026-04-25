@@ -34,6 +34,12 @@ What you have access to right now. Statuses: ✅ active, ⚠️ partial,
 - ✅ Telegram bot (`telegram_post` to log/requests threads is non-gated;
   approvals/main thread posting is approval-gated by convention).
 - ✅ Chris (via `ask_chris` — Requests thread). 4h SLA, async.
+  **Chris can reply to you directly in Telegram.** Any text message he
+  posts in the chat (any thread) is captured by the listener and
+  appended to your `state/INBOX.md` within ~25s. You'll see it on
+  your next tick under the prominent INBOX block, formatted as
+  `[telegram · thread N · HH:MM (reply to: "...")]`. The reply-to
+  context tells you which question the answer is responding to.
 - ⚠️ Fastmail mako@minkforge.com — `email_send` is approval-gated.
 - ◻️ UK-residential Chrome session via Chris's Mac — request via
   `ask_chris reason: browse via UK IP`.

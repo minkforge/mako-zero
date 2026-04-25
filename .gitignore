@@ -29,5 +29,6 @@ Thumbs.db
 # Build artefacts
 *.log
 
-# Working spec drafts (uncommitted, edit-with-coffee docs)
+# Working spec drafts and handover notes (uncommitted, local-only)
 DASHBOARD-SPEC.md
+OVERNIGHT-*.md

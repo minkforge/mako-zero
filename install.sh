@@ -30,6 +30,7 @@ else
     install -m 0644 "$SRC/digest.py"             "$ROOT/digest.py"
     install -m 0644 "$SRC/analyse.py"            "$ROOT/analyse.py"
     install -m 0644 "$SRC/scribe.py"             "$ROOT/scribe.py"
+    install -m 0644 "$SRC/tg_listener.py"        "$ROOT/tg_listener.py"
     install -m 0644 "$SRC/requirements.txt"      "$ROOT/requirements.txt"
     install -m 0644 "$SRC/config.example.yaml"   "$ROOT/config.example.yaml"
     install -m 0644 -d "$ROOT/prompts"

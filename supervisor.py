@@ -20,6 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import tick as t  # noqa: E402
+import tg_listener  # noqa: E402
 
 
 SHUTDOWN = threading.Event()
@@ -158,6 +159,20 @@ def main() -> int:
     print(f"[supervisor]   digest at {digest_hour:02d}:00 local", flush=True)
     print(f"[supervisor] config: {args.config}", flush=True)
     print(f"[supervisor] TZ: {os.environ.get('TZ', '(unset)')} · local now: {datetime.now().isoformat(timespec='seconds')}", flush=True)
+
+    # Telegram inbound listener — long-polls in a daemon thread, appending
+    # any reply you send into state/INBOX.md so Mako reads it next tick.
+    if cfg.get("telegram", {}).get("bot_token"):
+        listener = threading.Thread(
+            target=tg_listener.telegram_poller,
+            args=(cfg, paths.root, SHUTDOWN),
+            daemon=True,
+            name="tg-listener",
+        )
+        listener.start()
+        print(f"[supervisor]   tg-listener: thread started", flush=True)
+    else:
+        print(f"[supervisor]   tg-listener: skipped (no bot_token)", flush=True)
 
     next_tick = time.time()                     # run worker immediately on boot
     next_scribe = time.time() + scribe_interval # let the worker get a head start
