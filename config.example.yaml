@@ -1,0 +1,96 @@
+# mako-zero config.
+# Copy to /srv/mako-zero/config.yaml and fill in the secrets.
+# chmod 600 once populated.
+
+paths:
+  root: /srv/mako-zero
+  state: /srv/mako-zero/state
+  notes: /srv/mako-zero/notes
+  workdir: /srv/mako-zero/workdir
+  archive: /srv/mako-zero/archive
+  logs: /srv/mako-zero/logs
+  pending: /srv/mako-zero/pending
+  prompts: /srv/mako-zero/prompts
+
+llm:
+  primary:
+    type: ollama          # ollama | openai_compat
+    base_url: https://ollama.com
+    api_key: ""           # paste OLLAMA cloud key
+    model: kimi-k2.6      # whatever string Ollama Cloud exposes for it
+    timeout_s: 180
+    num_predict: 12000
+  fallback:
+    type: openai_compat
+    base_url: ""          # OpenCode endpoint (OpenAI-compatible)
+    api_key: ""
+    model: ""             # pick a fast cheap one in OpenCode
+    timeout_s: 90
+    num_predict: 8000
+
+context:
+  max_input_tokens: 18000     # heuristic: 4 chars/token
+  recent_journal_lines: 20
+  max_requested_notes: 3
+
+tick:
+  shell_timeout_s: 30
+  http_timeout_s: 30
+  http_response_max_bytes: 8192
+  shell_output_max_bytes: 4096
+  compact_every_n_ticks: 50
+  approval_threshold_pence: 200
+  budget_ceiling_pence_month: 10000  # £100/mo
+
+telegram:
+  bot_token: ""
+  chat_id: "-1003763660732"
+  log_thread_id: 9
+  requests_thread_id: 161
+  approvals_thread_id: 0     # set to a real id once the topic exists
+  digest_thread_id: 0        # daily digest goes here; falls back to log_thread
+
+digest:
+  enabled: true
+  hours_window: 24           # how far back to summarise
+
+supervisor:                  # used by docker / supervisor.py only
+  tick_interval_s: 120
+  digest_hour_local: 8
+  tick_timeout_s: 300        # hard ceiling per tick subprocess
+  digest_timeout_s: 60
+
+guardrails:
+  shell_denylist_substrings:
+    - "rm -rf /"
+    - "rm -rf ~"
+    - ":(){"
+    - "mkfs"
+    - "dd if=/dev/zero"
+    - "dd if=/dev/random"
+    - "shutdown"
+    - "reboot"
+    - "halt"
+    - "passwd"
+    - "useradd"
+    - "userdel"
+    - "chown -R"
+    - "chmod 777 /"
+    - "/etc/shadow"
+    - "/etc/passwd"
+    - " > /dev/sda"
+  writable_paths:
+    - state
+    - notes
+    - workdir
+    - archive
+    - pending
+  forbidden_paths:
+    - prompts
+    - lib
+    - tick.py
+    - mako-tick.sh
+    - config.yaml
+    - install.sh
+    - state/MISSION.md         # frozen, Chris-only
+    - state/CAPABILITIES.md    # Chris-only edits

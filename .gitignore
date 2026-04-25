@@ -1,0 +1,30 @@
+# Runtime data — never commit
+# (top-level only — `seed/notes/` is intentionally tracked)
+/data/
+/state/
+/notes/
+/workdir/
+/archive/
+/logs/
+/pending/
+
+# Populated config (only *.example.yaml is tracked)
+/config.yaml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Docker / build artefacts
+*.log

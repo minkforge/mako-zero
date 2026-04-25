@@ -1,0 +1,13 @@
+data/
+.git/
+.gitignore
+*.pyc
+__pycache__/
+.venv/
+venv/
+.DS_Store
+node_modules/
+*.log
+mako-tick.sh
+mako-digest.sh
+install.sh
