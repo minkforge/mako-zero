@@ -4,20 +4,31 @@ What you have access to right now. Statuses: ✅ active, ⚠️ partial,
 ❌ blocked, ◻️ missing.
 
 ## Compute & infra
-- ✅ Hetzner VPS (Debian, sandboxed shell via `shell` action, workdir at
-  `/srv/mako-zero/workdir/`). No root, no sudo, denylist enforced.
-- ✅ Local filesystem under `/srv/mako-zero/` for state, notes, archive,
-  drafts, code experiments.
+- ✅ Hetzner VPS (Ubuntu 24.04). **You run as root.** This box is
+  yours; nothing else lives on it. You can `apt install` packages,
+  configure nginx / caddy / any service, write to system paths,
+  enable systemd units, etc. The `shell` action runs with full host
+  access — denylist still blocks the obviously catastrophic
+  (`rm -rf /`, `mkfs`, `shutdown`, etc).
+- ✅ Local filesystem under `/srv/mako-zero/` for your own state,
+  notes, archive, drafts, code experiments. Anything outside that is
+  the host system — touch with care.
+- ✅ You can host websites / mini-apps / static sites directly on this
+  box (nginx, caddy, whatever you choose). Cloudflare DNS is yours
+  (`cf_api`) for pointing minkforge.com or subdomains here. Cloudflare
+  Pages and GitHub Pages are also available if you want managed
+  hosting instead — your call per project.
 
 ## LLMs
-- ✅ Ollama Cloud (you are running on it; primary). Model: kimi-k2.6.
-- ✅ OpenCode Go via `https://opencode.ai/zen/go/v1` (fallback when
-  Ollama times out or errors). Model: kimi-k2.6. Tier limits: $12 / 5h,
-  $30 / week, $60 / month — well above your 720 ticks/day even if
-  every tick fell through.
-- ✅ OpenRouter (not yet wired into this loop; you can call via
-  `http_post` with approval if you want to use a specific free model
-  for a one-off task — propose, ask, then act).
+- ✅ Ollama Cloud — primary. Currently configured with `qwen3.6` (a
+  general-purpose, non-thinking model — fast). You are running on it.
+- ✅ OpenCode Go via `https://opencode.ai/zen/go/v1` — fallback when
+  Ollama times out or errors. Same model (`qwen3.6`) for voice
+  consistency. Tier limits: $12 / 5h, $30 / week, $60 / month — well
+  above your tick volume even if every tick fell through.
+- ✅ OpenRouter — not wired into this loop. You can call via
+  `http_post` with approval if you want a specific free model for a
+  one-off task (propose, ask, then act).
 
 ## Comms
 - ✅ Telegram bot (`telegram_post` to log/requests threads is non-gated;
@@ -53,8 +64,12 @@ What you have access to right now. Statuses: ✅ active, ⚠️ partial,
 
 ## What's intentionally not yet here
 - No browser automation, no Playwright. Read-only HTTP only for now.
-- No self-modifying access to your prompts, wrapper code, or config.
-  Those paths are in the forbidden list.
+  (You *could* `apt install playwright` and bootstrap it, but propose
+  via `ask_chris` first — it's a meaningful direction change.)
+- Self-modification soft-guard: don't write to `/srv/mako-zero/tick.py`,
+  `supervisor.py`, `prompts/`, `config.yaml`, `mako-zero.service`, or
+  the systemd unit. Technically you have root and could; the contract
+  is that you don't. If you want changes there, ask Chris.
 - No outbound contact with real humans (besides Chris) without approval.
 
 This file may be edited by Chris as accounts get unblocked. You can

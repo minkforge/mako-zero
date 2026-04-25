@@ -1,0 +1,30 @@
+[Unit]
+Description=Mako Zero — autonomous agent supervisor
+Documentation=https://github.com/minkforge/mako-zero
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/mako-zero
+ExecStart=/usr/bin/python3 /srv/mako-zero/supervisor.py --config /srv/mako-zero/config.yaml
+
+# Single-purpose box, agent has full host access for installing services,
+# managing nginx/sites, etc. Runs as root deliberately.
+
+# Auto-restart on crash, but back off so we don't spin if config is bad.
+Restart=on-failure
+RestartSec=10s
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+# Logs go to journald; tail with: journalctl -u mako-zero -f
+StandardOutput=journal
+StandardError=journal
+
+# Resource ceilings (cheap insurance against runaway loops; tune as needed)
+MemoryMax=2048M
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target

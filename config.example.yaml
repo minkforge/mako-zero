@@ -1,6 +1,6 @@
 # mako-zero config.
-# Copy to /srv/mako-zero/config.yaml and fill in the secrets.
-# chmod 600 once populated.
+# install.sh seeds this to /srv/mako-zero/config.yaml on first run.
+# Edit there, fill in secrets, chmod 600 (root:mako-zero is fine).
 
 paths:
   root: /srv/mako-zero
@@ -14,19 +14,19 @@ paths:
 
 llm:
   primary:
-    type: ollama          # ollama | openai_compat
+    type: ollama
     base_url: https://ollama.com
-    api_key: ""           # paste OLLAMA cloud key
-    model: kimi-k2.6      # whatever string Ollama Cloud exposes for it
+    api_key: ""               # OLLAMA Cloud key
+    model: qwen3.6            # general-purpose, non-thinking, fast
     timeout_s: 180
-    num_predict: 12000
+    num_predict: 8000
   fallback:
     type: openai_compat
-    base_url: https://opencode.ai/zen/go/v1   # OpenCode Go (OpenAI-compatible)
-    api_key: ""                               # OpenCode Go key (sk-...)
-    model: kimi-k2.6                          # if 404, try opencode-go/kimi-k2.6
-    timeout_s: 90
-    num_predict: 8000
+    base_url: https://opencode.ai/zen/go/v1
+    api_key: ""               # OpenCode Go key (sk-...)
+    model: qwen3.6            # same family for voice consistency
+    timeout_s: 120
+    num_predict: 6000
 
 context:
   max_input_tokens: 18000     # heuristic: 4 chars/token
@@ -47,17 +47,17 @@ telegram:
   chat_id: "-1003763660732"
   log_thread_id: 9
   requests_thread_id: 161
-  approvals_thread_id: 0     # set to a real id once the topic exists
-  digest_thread_id: 0        # daily digest goes here; falls back to log_thread
+  approvals_thread_id: 0       # set to a real id once the topic exists
+  digest_thread_id: 0          # daily digest goes here; falls back to log_thread
 
 digest:
   enabled: true
-  hours_window: 24           # how far back to summarise
+  hours_window: 24             # how far back to summarise
 
-supervisor:                  # used by docker / supervisor.py only
-  tick_interval_s: 120
+supervisor:
+  tick_interval_s: 60          # gap between END of one tick and START of next
   digest_hour_local: 8
-  tick_timeout_s: 300        # hard ceiling per tick subprocess
+  tick_timeout_s: 300          # hard ceiling per tick subprocess
   digest_timeout_s: 60
 
 guardrails:
@@ -87,10 +87,12 @@ guardrails:
     - pending
   forbidden_paths:
     - prompts
-    - lib
     - tick.py
-    - mako-tick.sh
-    - config.yaml
+    - supervisor.py
+    - digest.py
+    - analyse.py
     - install.sh
+    - mako-zero.service
+    - config.yaml
     - state/MISSION.md         # frozen, Chris-only
     - state/CAPABILITIES.md    # Chris-only edits

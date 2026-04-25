@@ -28,25 +28,23 @@ SEED_DIR = APP_DIR / "seed"
 
 
 def bootstrap(cfg_path: str) -> bool:
-    """Set up /data on first boot. Returns True if config exists and supervisor
-    can continue, False if config was just seeded and the user needs to edit it."""
+    """Idempotent first-boot setup. Returns True if config exists and the
+    supervisor can continue, False if config was just seeded and the user
+    needs to edit it before next start."""
     cfg_p = Path(cfg_path)
     if not cfg_p.exists():
-        # Seed config from the docker template if available, else generic example
-        for candidate in (SEED_DIR / "config.docker.example.yaml",
-                          APP_DIR / "config.docker.example.yaml",
-                          APP_DIR / "config.example.yaml"):
-            if candidate.exists():
-                cfg_p.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy(candidate, cfg_p)
-                try:
-                    os.chmod(cfg_p, 0o600)
-                except OSError:
-                    pass
-                print(f"[bootstrap] seeded {cfg_path} from {candidate}", flush=True)
-                print("[bootstrap] EDIT IT (api keys, telegram bot/threads) then restart the container", flush=True)
-                return False
-        print(f"[bootstrap] no config at {cfg_path} and no seed template found", flush=True)
+        seed = APP_DIR / "config.example.yaml"
+        if seed.exists():
+            cfg_p.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(seed, cfg_p)
+            try:
+                os.chmod(cfg_p, 0o600)
+            except OSError:
+                pass
+            print(f"[bootstrap] seeded {cfg_path} from {seed}", flush=True)
+            print("[bootstrap] EDIT IT (api keys, telegram bot/threads) then restart the service", flush=True)
+            return False
+        print(f"[bootstrap] no config at {cfg_path} and no config.example.yaml in {APP_DIR}", flush=True)
         return False
 
     cfg = t.load_config(cfg_path)
@@ -125,8 +123,8 @@ def main() -> int:
 
     if not bootstrap(args.config):
         # Config was just seeded; user needs to edit it before we run.
-        # Sleep forever so docker doesn't crash-loop.
-        print("[supervisor] waiting for config edit + container restart", flush=True)
+        # Sleep forever rather than crash-looping under systemd.
+        print("[supervisor] waiting for config edit + service restart", flush=True)
         signal.signal(signal.SIGTERM, handle_signal)
         signal.signal(signal.SIGINT, handle_signal)
         SHUTDOWN.wait()

@@ -1,25 +1,37 @@
 #!/usr/bin/env bash
-# mako-zero install / first-time setup. Run once on the Hetzner box.
-# Idempotent: safe to re-run; will not clobber an existing config or state.
+# mako-zero — host install with systemd. Idempotent.
+#
+# Run as root (or sudo) from the cloned repo. Installs code into
+# /srv/mako-zero, seeds state and config, installs the systemd unit,
+# and prints the next steps. On first run the supervisor seeds
+# config.yaml from the example and parks; you edit it and
+# `systemctl restart mako-zero`.
+
 set -euo pipefail
 
 ROOT="${MAKO_ROOT:-/srv/mako-zero}"
+SERVICE_NAME="${MAKO_SERVICE:-mako-zero}"
+SRC="$(cd "$(dirname "$0")" && pwd)"
 
-echo "==> ensuring directories under $ROOT"
+if [ "$(id -u)" -ne 0 ]; then
+    echo "ERROR: run as root (sudo $0). Mako runs as root by design on this single-purpose box."
+    exit 1
+fi
+
+echo "==> ensuring directory tree at $ROOT"
 mkdir -p "$ROOT"/{state,notes,workdir,archive,logs,pending,prompts}
-chmod 750 "$ROOT"
 
 echo "==> copying source files"
-SRC="$(cd "$(dirname "$0")" && pwd)"
-install -m 0755 "$SRC/mako-tick.sh"   "$ROOT/mako-tick.sh"
-install -m 0755 "$SRC/mako-digest.sh" "$ROOT/mako-digest.sh"
-install -m 0644 "$SRC/tick.py"        "$ROOT/tick.py"
-install -m 0644 "$SRC/digest.py"      "$ROOT/digest.py"
-install -m 0644 "$SRC/requirements.txt" "$ROOT/requirements.txt"
-install -m 0644 "$SRC/prompts/system.md"  "$ROOT/prompts/system.md"
-install -m 0644 "$SRC/prompts/compact.md" "$ROOT/prompts/compact.md"
+install -m 0644 "$SRC/tick.py"               "$ROOT/tick.py"
+install -m 0644 "$SRC/supervisor.py"         "$ROOT/supervisor.py"
+install -m 0644 "$SRC/digest.py"             "$ROOT/digest.py"
+install -m 0644 "$SRC/analyse.py"            "$ROOT/analyse.py"
+install -m 0644 "$SRC/requirements.txt"      "$ROOT/requirements.txt"
+install -m 0644 "$SRC/config.example.yaml"   "$ROOT/config.example.yaml"
+install -m 0644 "$SRC/prompts/system.md"     "$ROOT/prompts/system.md"
+install -m 0644 "$SRC/prompts/compact.md"    "$ROOT/prompts/compact.md"
 
-echo "==> seeding state files (won't overwrite existing)"
+echo "==> seeding state files (idempotent — kept if already populated)"
 seed() {
     local from="$1" to="$2"
     if [ ! -f "$to" ]; then
@@ -38,27 +50,60 @@ seed "$SRC/seed/notes/INDEX.md"  "$ROOT/notes/INDEX.md"
 [ -f "$ROOT/state/JOURNAL.md" ]      || : > "$ROOT/state/JOURNAL.md"
 [ -f "$ROOT/state/LAST_RESULTS.md" ] || echo "_first tick — no prior results_" > "$ROOT/state/LAST_RESULTS.md"
 
-echo "==> config"
+echo "==> seeding config.yaml (only if missing)"
+SEEDED_CONFIG=0
 if [ ! -f "$ROOT/config.yaml" ]; then
     install -m 0600 "$SRC/config.example.yaml" "$ROOT/config.yaml"
-    echo "    seeded config.yaml — EDIT IT before enabling cron"
+    SEEDED_CONFIG=1
+    echo "    seeded $ROOT/config.yaml — EDIT IT before starting the service"
 else
-    echo "    kept config.yaml"
+    echo "    kept $ROOT/config.yaml"
 fi
 
-echo "==> python deps (system pip; switch to a venv if you prefer)"
-python3 -m pip install --quiet -r "$ROOT/requirements.txt" || {
-    echo "    pip install failed — install requests + pyyaml manually"
-}
+echo "==> Python deps"
+if python3 -m pip install --quiet --break-system-packages -r "$ROOT/requirements.txt" 2>/dev/null; then
+    :
+elif python3 -m pip install --quiet -r "$ROOT/requirements.txt"; then
+    :
+else
+    echo "    pip install failed — install requests + pyyaml manually before starting the service"
+fi
+
+echo "==> installing systemd unit"
+install -m 0644 "$SRC/mako-zero.service" "/etc/systemd/system/$SERVICE_NAME.service"
+systemctl daemon-reload
 
 echo "==> done."
 echo
-echo "Next steps:"
-echo "  1. \$EDITOR $ROOT/config.yaml   # fill in api keys, telegram bot, thread ids"
-echo "  2. chmod 600 $ROOT/config.yaml"
-echo "  3. test one tick:    sudo -u mako-zero $ROOT/mako-tick.sh"
-echo "  4. test the digest:  sudo -u mako-zero $ROOT/mako-digest.sh"
-echo "  5. check the run:    tail $ROOT/logs/metrics.csv ; cat $ROOT/state/LAST_RESULTS.md"
-echo "  6. add to crontab:"
-echo "     */2 * * * * $ROOT/mako-tick.sh"
-echo "     0 8 * * *   $ROOT/mako-digest.sh"
+if [ "$SEEDED_CONFIG" = "1" ]; then
+    cat <<EOF
+Next steps:
+
+  1. \$EDITOR $ROOT/config.yaml
+       fill in: llm.primary.api_key, llm.fallback.api_key,
+                telegram.bot_token, telegram.{log,requests,approvals,digest}_thread_id
+
+  2. systemctl enable --now $SERVICE_NAME
+
+  3. journalctl -u $SERVICE_NAME -f
+       you should see:
+         [supervisor] starting (tick every 60s, digest at 08:00 local)
+         [supervisor] tick(normal): start ...
+
+Useful commands later:
+  systemctl status   $SERVICE_NAME
+  systemctl restart  $SERVICE_NAME
+  systemctl stop     $SERVICE_NAME
+  journalctl -u $SERVICE_NAME --since "1 hour ago"
+  python3 $ROOT/digest.py  --config $ROOT/config.yaml    # fire a digest now
+  python3 $ROOT/analyse.py --config $ROOT/config.yaml    # post-soak metrics
+EOF
+else
+    cat <<EOF
+Next steps:
+
+  systemctl daemon-reload
+  systemctl restart $SERVICE_NAME
+  journalctl -u $SERVICE_NAME -f
+EOF
+fi
