@@ -17,7 +17,7 @@ llm:
     type: ollama
     base_url: https://ollama.com
     api_key: ""               # OLLAMA Cloud key
-    model: qwen3.6            # general-purpose, non-thinking, fast
+    model: qwen3.5            # general-purpose, non-thinking, fast
     timeout_s: 180
     num_predict: 8000
   fallback:
@@ -59,6 +59,19 @@ supervisor:
   digest_hour_local: 8
   tick_timeout_s: 300          # hard ceiling per tick subprocess
   digest_timeout_s: 60
+  scribe_interval_s: 1800      # scribe runs every 30 min, between worker ticks
+  scribe_timeout_s: 240        # writing-heavy, can be slower than worker tick
+
+scribe:
+  enabled: true
+  recent_journal_lines: 100    # full picture, not just last 20
+  max_drafts_per_run: 1        # avoid flooding the outbox
+  approval_thread: approvals   # approvals | requests | log
+
+logging:
+  full_payload: true           # write logs/ticks/<n>.json with raw req/resp
+  keep_days: 14                # `find logs/ticks logs/scribe -mtime +N -delete`
+                               # (V0 doesn't auto-rotate; you do it yourself)
 
 guardrails:
   shell_denylist_substrings:
@@ -91,6 +104,7 @@ guardrails:
     - supervisor.py
     - digest.py
     - analyse.py
+    - scribe.py
     - install.sh
     - mako-zero.service
     - config.yaml

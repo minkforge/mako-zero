@@ -29,11 +29,13 @@ else
     install -m 0644 "$SRC/supervisor.py"         "$ROOT/supervisor.py"
     install -m 0644 "$SRC/digest.py"             "$ROOT/digest.py"
     install -m 0644 "$SRC/analyse.py"            "$ROOT/analyse.py"
+    install -m 0644 "$SRC/scribe.py"             "$ROOT/scribe.py"
     install -m 0644 "$SRC/requirements.txt"      "$ROOT/requirements.txt"
     install -m 0644 "$SRC/config.example.yaml"   "$ROOT/config.example.yaml"
     install -m 0644 -d "$ROOT/prompts"
     install -m 0644 "$SRC/prompts/system.md"     "$ROOT/prompts/system.md"
     install -m 0644 "$SRC/prompts/compact.md"    "$ROOT/prompts/compact.md"
+    install -m 0644 "$SRC/prompts/scribe.md"     "$ROOT/prompts/scribe.md"
 fi
 
 echo "==> seeding state files (idempotent — kept if already populated)"

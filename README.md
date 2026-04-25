@@ -16,15 +16,17 @@ runs as root by design — the box is his.
 ```
 /srv/mako-zero/
 ├── supervisor.py            # systemd entrypoint: scheduler + bootstrap
-├── tick.py                  # one tick of the agent loop
+├── tick.py                  # worker — does the work each tick (~60s)
+├── scribe.py                # writer — drafts blog posts (~30 min)
 ├── digest.py                # daily summary
 ├── analyse.py               # post-soak metrics summary
 ├── install.sh               # idempotent first-run setup
 ├── mako-zero.service        # systemd unit (installed to /etc/systemd/system/)
 ├── config.yaml              # secrets + tuning (chmod 600, gitignored)
 ├── prompts/
-│   ├── system.md            # Mako's system prompt
-│   └── compact.md           # used on compaction ticks
+│   ├── system.md            # worker prompt — does the work
+│   ├── compact.md           # used on compaction ticks
+│   └── scribe.md            # writer prompt — drafts blog posts
 ├── state/                   # files Mako reads + rewrites every tick
 │   ├── MISSION.md           # frozen, edited only by Chris
 │   ├── CAPABILITIES.md      # current access list, edited by Chris
@@ -43,29 +45,48 @@ runs as root by design — the box is his.
 ├── archive/                 # rolled-out journals after compaction
 ├── pending/
 │   └── pending_actions.jsonl   # gated actions waiting on Chris
+├── state/outbox/blog/drafts/   # scribe's blog drafts awaiting your approval
 └── logs/
-    ├── metrics.csv          # one row per tick — for the 48h analysis
-    └── error-N.log          # tracebacks for failing ticks
+    ├── metrics.csv             # one row per tick — for the 48h analysis
+    ├── ticks/<NNNNNNNN>.json   # FULL request/response payload per worker tick
+    ├── scribe/<NNNNNNNN>.json  # FULL request/response payload per scribe run
+    └── error-N.log             # tracebacks for failing ticks
 ```
 
-## Per-tick flow
+## Two cooperating loops
 
-1. `supervisor.py` (systemd `Type=simple`, restart on failure) loops
-   forever, sleeping `tick_interval_s` (default 60) between the **end**
-   of one tick and the **start** of the next. Single subprocess at a
-   time — no overlap by construction.
-2. If `state/compact_pending.flag` exists → compaction mode, else normal.
-3. `tick.py` assembles hot context (~7K tokens) plus up to 3 notes files
-   that Mako requested last tick.
-4. LLM call: Ollama Cloud (`qwen3.6`) primary, OpenCode Go (`qwen3.6`)
+`supervisor.py` (systemd `Type=simple`, restart on failure) runs both
+the worker and the scribe sequentially in one process. No overlap by
+construction — only one subprocess fires at a time.
+
+### Worker tick (`tick.py`, ~60s cadence)
+
+1. If `state/compact_pending.flag` exists → compaction mode, else normal.
+2. Assemble hot context (~7K tokens) plus up to 3 notes files Mako
+   requested last tick + INBOX.md if Chris dropped one.
+3. LLM call: Ollama Cloud (`qwen3.5`) primary, OpenCode Go (`qwen3.5`)
    fallback.
-5. Extract JSON from the response.
-6. Apply file writes (writable_paths only — code/prompts/config blocked).
-7. Execute non-gated actions; queue gated ones to `pending_actions.jsonl`.
-8. Write `LAST_RESULTS.md` for next tick to read.
-9. Append to journal. Maybe set compaction flag.
-10. Post a tick summary to the Telegram log thread.
-11. Append a row to `logs/metrics.csv`.
+4. Extract JSON from the response.
+5. Apply file writes (writable_paths only — code/prompts/config blocked).
+6. Execute non-gated actions; queue gated ones to `pending_actions.jsonl`.
+7. Write `LAST_RESULTS.md` for next tick to read.
+8. Append to journal. Maybe set compaction flag.
+9. Post a tick summary to the Telegram log thread.
+10. Append a row to `logs/metrics.csv` AND a full payload to
+    `logs/ticks/<NNNNNNNN>.json`.
+
+### Scribe run (`scribe.py`, ~30 min cadence)
+
+1. Read MISSION, PERSONA, last 100 journal lines, notes index, recent
+   notes, and the existing blog drafts in the outbox.
+2. LLM call (same provider chain).
+3. Either drafts a blog post into `state/outbox/blog/drafts/` and pings
+   the approvals thread, or explicitly skips with a reason.
+4. Never runs actions, never modifies worker state.
+5. Full payload to `logs/scribe/<NNNNNNNN>.json`.
+
+The scribe is the writer; the worker is the doer. They share the same
+persona and the same brand.
 
 ## Feedback channels
 
@@ -114,6 +135,31 @@ runs as root by design — the box is his.
 - `spend` over £2
 
 Any action with `needs_approval: true` is queued regardless of type.
+
+## Full-payload logging
+
+Every worker tick and every scribe run writes a complete
+request/response payload to disk:
+
+- `logs/ticks/<NNNNNNNN>.json` — system prompt, user message, all
+  attempted LLM provider calls (request body + response body, with
+  `Authorization` headers redacted), parsed JSON response, files
+  written, action results, telegram posts, errors.
+- `logs/scribe/<NNNNNNNN>.json` — same shape for scribe runs.
+
+This is the forensic log for offline analysis (post-mortems, prompt
+tuning, model evaluation). The summary stats remain in
+`logs/metrics.csv` — fast to read at scale, but not enough detail when
+something weird happens.
+
+Storage is ~50–100KB per tick + similar per scribe run. Roughly
+40MB/day at default cadence. Disable via `logging.full_payload: false`
+in config, or rotate manually:
+
+```bash
+find /srv/mako-zero/logs/ticks  -mtime +14 -delete
+find /srv/mako-zero/logs/scribe -mtime +14 -delete
+```
 
 ## Token budgets
 

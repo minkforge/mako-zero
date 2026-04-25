@@ -116,6 +116,14 @@ def run_digest(cfg: dict, cfg_path: str) -> None:
                    timeout_s)
 
 
+def run_scribe(cfg: dict, cfg_path: str) -> None:
+    timeout_s = cfg.get("supervisor", {}).get("scribe_timeout_s", 240)
+    run_subprocess("scribe",
+                   [sys.executable, str(Path(__file__).parent / "scribe.py"),
+                    "--config", cfg_path],
+                   timeout_s)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
@@ -136,29 +144,49 @@ def main() -> int:
 
     sup = cfg.get("supervisor", {})
     tick_interval = int(sup.get("tick_interval_s", 120))
+    scribe_interval = int(sup.get("scribe_interval_s", 1800))
     digest_hour = int(sup.get("digest_hour_local", 8))
+    scribe_enabled = bool(cfg.get("scribe", {}).get("enabled", True))
     poll_s = 5
 
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
 
-    print(f"[supervisor] starting (tick every {tick_interval}s, digest at {digest_hour:02d}:00 local)", flush=True)
+    print(f"[supervisor] starting", flush=True)
+    print(f"[supervisor]   tick every {tick_interval}s", flush=True)
+    print(f"[supervisor]   scribe every {scribe_interval}s ({'on' if scribe_enabled else 'off'})", flush=True)
+    print(f"[supervisor]   digest at {digest_hour:02d}:00 local", flush=True)
     print(f"[supervisor] config: {args.config}", flush=True)
     print(f"[supervisor] TZ: {os.environ.get('TZ', '(unset)')} · local now: {datetime.now().isoformat(timespec='seconds')}", flush=True)
 
-    next_tick = time.time()  # run one immediately on boot
+    next_tick = time.time()                     # run worker immediately on boot
+    next_scribe = time.time() + scribe_interval # let the worker get a head start
     last_digest_date = None
 
     while not SHUTDOWN.is_set():
         now = time.time()
+        ran_something = False
 
+        # Worker tick has priority — it's the heartbeat.
         if now >= next_tick:
             try:
                 run_tick(cfg, args.config)
             except Exception as e:
                 print(f"[supervisor] tick error: {e!r}", flush=True)
             next_tick = time.time() + tick_interval
+            ran_something = True
 
+        # Scribe runs in the gap between worker ticks. Single-subprocess
+        # discipline means it never overlaps with a tick.
+        elif scribe_enabled and now >= next_scribe:
+            try:
+                run_scribe(cfg, args.config)
+            except Exception as e:
+                print(f"[supervisor] scribe error: {e!r}", flush=True)
+            next_scribe = time.time() + scribe_interval
+            ran_something = True
+
+        # Daily digest fires at most once per local-date.
         local = datetime.now()
         if local.hour == digest_hour and last_digest_date != local.date():
             try:
@@ -166,8 +194,11 @@ def main() -> int:
             except Exception as e:
                 print(f"[supervisor] digest error: {e!r}", flush=True)
             last_digest_date = local.date()
+            ran_something = True
 
-        SHUTDOWN.wait(timeout=poll_s)
+        # If we ran something, loop again immediately to re-check schedule.
+        if not ran_something:
+            SHUTDOWN.wait(timeout=poll_s)
 
     print("[supervisor] clean exit", flush=True)
     return 0

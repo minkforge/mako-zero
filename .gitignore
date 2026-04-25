@@ -26,5 +26,8 @@ Thumbs.db
 .idea/
 .vscode/
 
-# Docker / build artefacts
+# Build artefacts
 *.log
+
+# Working spec drafts (uncommitted, edit-with-coffee docs)
+DASHBOARD-SPEC.md

@@ -220,6 +220,17 @@ class ProviderError(RuntimeError):
     pass
 
 
+def _redact(headers: dict) -> dict:
+    """Strip secrets from header dict for logging."""
+    out = {}
+    for k, v in headers.items():
+        if k.lower() in ("authorization", "x-api-key", "api-key"):
+            out[k] = "[REDACTED]"
+        else:
+            out[k] = v
+    return out
+
+
 def call_ollama(spec: dict, system: str, user: str) -> tuple[str, dict]:
     base = spec["base_url"].rstrip("/")
     url = f"{base}/api/chat"
@@ -240,9 +251,16 @@ def call_ollama(spec: dict, system: str, user: str) -> tuple[str, dict]:
     t0 = time.time()
     r = requests.post(url, headers=headers, json=body, timeout=spec["timeout_s"])
     dt = time.time() - t0
+    raw_text = r.text
     if r.status_code != 200:
-        raise ProviderError(f"ollama HTTP {r.status_code}: {r.text[:300]}")
-    data = r.json()
+        meta = {"provider": "ollama", "model": spec["model"], "wall_s": round(dt, 2),
+                "url": url, "request_headers": _redact(headers), "request_body": body,
+                "response_status": r.status_code, "response_body": raw_text[:4000]}
+        raise ProviderError(f"ollama HTTP {r.status_code}: {raw_text[:300]}", meta)
+    try:
+        data = r.json()
+    except ValueError:
+        raise ProviderError(f"ollama non-JSON response: {raw_text[:300]}")
     content = (data.get("message") or {}).get("content")
     if not content:
         raise ProviderError(f"ollama empty content: {str(data)[:300]}")
@@ -250,6 +268,11 @@ def call_ollama(spec: dict, system: str, user: str) -> tuple[str, dict]:
         "provider": "ollama",
         "model": spec["model"],
         "wall_s": round(dt, 2),
+        "url": url,
+        "request_headers": _redact(headers),
+        "request_body": body,
+        "response_status": r.status_code,
+        "response_body": data,
         "prompt_eval_count": data.get("prompt_eval_count"),
         "eval_count": data.get("eval_count"),
     }
@@ -274,9 +297,13 @@ def call_openai_compat(spec: dict, system: str, user: str) -> tuple[str, dict]:
     t0 = time.time()
     r = requests.post(url, headers=headers, json=body, timeout=spec["timeout_s"])
     dt = time.time() - t0
+    raw_text = r.text
     if r.status_code != 200:
-        raise ProviderError(f"openai_compat HTTP {r.status_code}: {r.text[:300]}")
-    data = r.json()
+        raise ProviderError(f"openai_compat HTTP {r.status_code}: {raw_text[:300]}")
+    try:
+        data = r.json()
+    except ValueError:
+        raise ProviderError(f"openai_compat non-JSON response: {raw_text[:300]}")
     try:
         content = data["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError):
@@ -287,6 +314,11 @@ def call_openai_compat(spec: dict, system: str, user: str) -> tuple[str, dict]:
         "provider": "openai_compat",
         "model": spec["model"],
         "wall_s": round(dt, 2),
+        "url": url,
+        "request_headers": _redact(headers),
+        "request_body": body,
+        "response_status": r.status_code,
+        "response_body": data,
         "usage": data.get("usage"),
     }
     return content, meta
@@ -301,19 +333,27 @@ def call_provider(spec: dict, system: str, user: str) -> tuple[str, dict]:
     raise ProviderError(f"unknown provider type {t}")
 
 
-def call_llm_with_fallback(cfg: dict, system: str, user: str) -> tuple[str, dict, list[str]]:
+def call_llm_with_fallback(cfg: dict, system: str, user: str) -> tuple[str, dict, list[str], list[dict]]:
+    """Returns (content, meta, failure_strings, attempt_records).
+    attempt_records contains the request/response for every attempt
+    (success and failure) so the per-tick log captures the full picture."""
     failures: list[str] = []
+    attempts: list[dict] = []
     for slot in ("primary", "fallback"):
         spec = cfg["llm"][slot]
         if not spec.get("base_url") or not spec.get("model"):
             failures.append(f"{slot}: not configured")
+            attempts.append({"slot": slot, "ok": False, "error": "not configured"})
             continue
         try:
             content, meta = call_provider(spec, system, user)
             meta["slot"] = slot
-            return content, meta, failures
+            attempts.append({"slot": slot, "ok": True, "meta": meta, "content": content})
+            return content, meta, failures, attempts
         except (ProviderError, requests.Timeout, requests.ConnectionError) as e:
             failures.append(f"{slot}({spec['type']}): {e}")
+            attempts.append({"slot": slot, "ok": False, "type": spec["type"],
+                             "model": spec.get("model"), "error": str(e)[:1000]})
             continue
     raise ProviderError("all providers failed: " + "; ".join(failures))
 
@@ -616,6 +656,21 @@ METRIC_FIELDS = [
 ]
 
 
+def write_full_log(paths: Paths, kind: str, n: int, payload: dict) -> Path | None:
+    """Write the full request/response payload for one run to logs/<kind>/<n>.json.
+    Returns the path or None if writing fails. kind is 'ticks' or 'scribe'."""
+    out = paths.logs / kind / f"{n:08d}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        out.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+                       encoding="utf-8")
+        return out
+    except Exception as e:
+        # Logging failure must never break the tick.
+        sys.stderr.write(f"write_full_log failed: {e!r}\n")
+        return None
+
+
 def record_metric(paths: Paths, row: dict) -> None:
     p = paths.logs / "metrics.csv"
     new_file = not p.exists()
@@ -676,10 +731,30 @@ def main() -> int:
 
     inbox_snap = snapshot_inbox(paths)
 
+    # Full-payload log (written at the very end, success or failure).
+    full_log: dict[str, Any] = {
+        "tick_n": tick_n,
+        "mode": args.mode,
+        "started_at": now_iso(),
+        "system_prompt": None,
+        "user_message": None,
+        "sizes": None,
+        "inbox_present": bool(inbox_snap),
+        "llm_attempts": [],
+        "raw_content": None,
+        "parsed_response": None,
+        "files_written": [],
+        "actions": [],
+        "telegram_posts": [],
+        "errors": [],
+    }
+
     try:
         # --- assemble context ---
         requested_notes = read_pending_note_requests(paths)
         user_msg, sizes = assemble_hot_context(cfg, paths, requested_notes, inbox_snap)
+        full_log["user_message"] = user_msg
+        full_log["sizes"] = sizes
 
         max_in = cfg["context"]["max_input_tokens"]
         if sizes["_total_tokens_est"] > max_in:
@@ -693,17 +768,21 @@ def main() -> int:
         system = read_text(paths.prompts / prompt_file)
         if not system:
             raise RuntimeError(f"missing system prompt: {prompt_file}")
+        full_log["system_prompt"] = system
 
         # --- LLM call ---
-        content, meta, prov_failures = call_llm_with_fallback(cfg, system, user_msg)
+        content, meta, prov_failures, attempts = call_llm_with_fallback(cfg, system, user_msg)
         failures.extend(prov_failures)
         output_chars = len(content)
+        full_log["llm_attempts"] = attempts
+        full_log["raw_content"] = content
 
         # --- parse ---
         obj = extract_json(content)
         if obj is None:
             raise RuntimeError("PARSE_ERROR: no JSON object in response")
         parse_ok = True
+        full_log["parsed_response"] = obj
 
         # --- apply state writes ---
         if isinstance(obj.get("state_md"), str):
@@ -714,6 +793,7 @@ def main() -> int:
 
         # --- model-emitted file writes ---
         file_results = apply_model_files(cfg, paths, obj.get("files") or [])
+        full_log["files_written"] = file_results
 
         # --- actions ---
         action_results: list[dict] = []
@@ -724,6 +804,7 @@ def main() -> int:
                 actions_queued += 1
             else:
                 actions_executed += 1
+        full_log["actions"] = action_results
 
         # --- LAST_RESULTS.md for next tick ---
         last_results = render_last_results(tick_n, args.mode, file_results, action_results, meta)
@@ -770,9 +851,11 @@ def main() -> int:
         tb = traceback.format_exc()
         write_text(paths.logs / f"error-{tick_n}.log",
                    f"{now_iso()}\n{tb}\n\nfailures: {failures}\n")
+        full_log["errors"].append({"type": type(e).__name__, "message": str(e), "traceback": tb})
         msg = f"🦫 #{tick_n} FAIL · {type(e).__name__}: {str(e)[:200]}"
         try:
-            telegram_send(cfg, msg, thread_id=cfg["telegram"]["log_thread_id"], label="fail")
+            res = telegram_send(cfg, msg, thread_id=cfg["telegram"]["log_thread_id"], label="fail")
+            full_log["telegram_posts"].append({"text": msg, "thread_id": cfg["telegram"]["log_thread_id"], "result": res})
         except Exception:
             pass
         record_metric(paths, {
@@ -785,6 +868,11 @@ def main() -> int:
             "drift_flag": drift_flag or "", "compact_now": compact_now_flag,
             "failures": " | ".join(failures + [f"{type(e).__name__}: {e}"])[:500],
         })
+        if cfg.get("logging", {}).get("full_payload", True):
+            full_log["ended_at"] = now_iso()
+            full_log["wall_s"] = round(time.time() - t_start, 2)
+            full_log["outcome"] = "fail"
+            write_full_log(paths, "ticks", tick_n, full_log)
         return 1
 
     record_metric(paths, {
@@ -801,6 +889,11 @@ def main() -> int:
         "compact_now": compact_now_flag,
         "failures": " | ".join(failures)[:500],
     })
+    if cfg.get("logging", {}).get("full_payload", True):
+        full_log["ended_at"] = now_iso()
+        full_log["wall_s"] = round(time.time() - t_start, 2)
+        full_log["outcome"] = "ok"
+        write_full_log(paths, "ticks", tick_n, full_log)
     return 0
 
 
