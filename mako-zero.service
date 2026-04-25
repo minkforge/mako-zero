@@ -4,6 +4,12 @@ Documentation=https://github.com/minkforge/mako-zero
 After=network-online.target
 Wants=network-online.target
 
+# Rate-limit restarts so a bad config doesn't crash-loop forever.
+# These belong in [Unit], not [Service] — older systemd guides put them
+# under [Service], which silently no-ops on modern systemd.
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
 [Service]
 Type=simple
 WorkingDirectory=/srv/mako-zero
@@ -12,11 +18,9 @@ ExecStart=/usr/bin/python3 /srv/mako-zero/supervisor.py --config /srv/mako-zero/
 # Single-purpose box, agent has full host access for installing services,
 # managing nginx/sites, etc. Runs as root deliberately.
 
-# Auto-restart on crash, but back off so we don't spin if config is bad.
+# Auto-restart on crash, with backoff (paired with StartLimit* in [Unit]).
 Restart=on-failure
 RestartSec=10s
-StartLimitIntervalSec=300
-StartLimitBurst=10
 
 # Logs go to journald; tail with: journalctl -u mako-zero -f
 StandardOutput=journal
