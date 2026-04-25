@@ -195,11 +195,12 @@ git clone https://github.com/minkforge/mako-zero.git mako-zero
 cd mako-zero
 ```
 
-Or rsync from your laptop:
+Or, if you're iterating on the code locally and don't want to push
+through GitHub yet, rsync from your laptop:
 
 ```bash
-# from your laptop
-rsync -av --exclude data --exclude .git /path/to/mako-zero/ \
+# from your laptop, in the repo root
+rsync -av --exclude data --exclude .git ./ \
   deploy@<server-ip>:/opt/mako-zero/
 ```
 
@@ -296,16 +297,16 @@ Container internals:
 
 ## Install — bare VPS without Docker (alternative)
 
-```bash
-# from your laptop:
-rsync -av --exclude '.git' /tmp/mako-zero/ root@hetzner:/tmp/mako-zero/
-ssh root@hetzner
+For when you don't want Docker (smaller resource footprint, easier to
+debug step-by-step, or your host doesn't allow it).
 
-# on the box:
+```bash
+# on the box, as root:
+git clone https://github.com/minkforge/mako-zero.git /tmp/mako-zero-src
 useradd -r -m -d /srv/mako-zero -s /bin/bash mako-zero || true
 mkdir -p /srv/mako-zero
 chown mako-zero:mako-zero /srv/mako-zero
-sudo -u mako-zero bash /tmp/mako-zero/install.sh
+sudo -u mako-zero bash /tmp/mako-zero-src/install.sh
 
 # fill in the config
 sudo -u mako-zero $EDITOR /srv/mako-zero/config.yaml
@@ -321,6 +322,10 @@ sudo crontab -u mako-zero -e
 # add:
 # */2 * * * * /srv/mako-zero/mako-tick.sh
 # 0 8 * * *   /srv/mako-zero/mako-digest.sh
+
+# upgrades:
+cd /tmp/mako-zero-src && git pull
+sudo -u mako-zero bash /tmp/mako-zero-src/install.sh   # idempotent — won't clobber state
 ```
 
 ## 48-hour soak: what to watch
@@ -353,8 +358,22 @@ in cron and re-soak.
 
 ## Resetting
 
+**Docker:**
+
 ```bash
-# wipe state but keep code + prompts + config:
-rm -rf /srv/mako-zero/state/*  /srv/mako-zero/notes/*  /srv/mako-zero/workdir/*  /srv/mako-zero/archive/*  /srv/mako-zero/pending/*  /srv/mako-zero/logs/*
-sudo -u mako-zero bash /tmp/mako-zero/install.sh   # re-seed
+cd /opt/mako-zero
+docker compose down
+sudo rm -rf data/state data/notes data/workdir data/archive data/pending data/logs
+# (config.yaml is preserved)
+docker compose up -d   # supervisor will re-seed state from /app/seed/
+```
+
+**Bare VPS:**
+
+```bash
+# wipe runtime state but keep code + prompts + config:
+sudo rm -rf /srv/mako-zero/state/*  /srv/mako-zero/notes/*  /srv/mako-zero/workdir/* \
+            /srv/mako-zero/archive/* /srv/mako-zero/pending/* /srv/mako-zero/logs/*
+# re-run install.sh from your checkout to reseed:
+sudo -u mako-zero bash /path/to/mako-zero/install.sh
 ```
