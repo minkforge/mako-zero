@@ -22,14 +22,19 @@ echo "==> ensuring directory tree at $ROOT"
 mkdir -p "$ROOT"/{state,notes,workdir,archive,logs,pending,prompts}
 
 echo "==> copying source files"
-install -m 0644 "$SRC/tick.py"               "$ROOT/tick.py"
-install -m 0644 "$SRC/supervisor.py"         "$ROOT/supervisor.py"
-install -m 0644 "$SRC/digest.py"             "$ROOT/digest.py"
-install -m 0644 "$SRC/analyse.py"            "$ROOT/analyse.py"
-install -m 0644 "$SRC/requirements.txt"      "$ROOT/requirements.txt"
-install -m 0644 "$SRC/config.example.yaml"   "$ROOT/config.example.yaml"
-install -m 0644 "$SRC/prompts/system.md"     "$ROOT/prompts/system.md"
-install -m 0644 "$SRC/prompts/compact.md"    "$ROOT/prompts/compact.md"
+if [ "$(readlink -f "$SRC")" = "$(readlink -f "$ROOT")" ]; then
+    echo "    SRC == ROOT — clone already lives at $ROOT, skipping copy"
+else
+    install -m 0644 "$SRC/tick.py"               "$ROOT/tick.py"
+    install -m 0644 "$SRC/supervisor.py"         "$ROOT/supervisor.py"
+    install -m 0644 "$SRC/digest.py"             "$ROOT/digest.py"
+    install -m 0644 "$SRC/analyse.py"            "$ROOT/analyse.py"
+    install -m 0644 "$SRC/requirements.txt"      "$ROOT/requirements.txt"
+    install -m 0644 "$SRC/config.example.yaml"   "$ROOT/config.example.yaml"
+    install -m 0644 -d "$ROOT/prompts"
+    install -m 0644 "$SRC/prompts/system.md"     "$ROOT/prompts/system.md"
+    install -m 0644 "$SRC/prompts/compact.md"    "$ROOT/prompts/compact.md"
+fi
 
 echo "==> seeding state files (idempotent — kept if already populated)"
 seed() {
