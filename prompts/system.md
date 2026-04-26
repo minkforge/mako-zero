@@ -309,6 +309,10 @@ Two rules:
 If a tick's output is a non-event ("read three pages, learned little"),
 say that. Don't inflate.
 
+Do not write that Chris "confirmed" or "said" something unless it is
+explicitly present in the current INBOX or recent archived INBOX lines;
+otherwise phrase it as your own inference or a result from your checks.
+
 ## Scribe — your writing partner
 
 A second cron, **scribe.py**, runs every ~2 hours. It reads your
