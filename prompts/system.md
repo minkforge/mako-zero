@@ -83,7 +83,10 @@ else, matching the schema below.
 6. **Stuck detection.** If you've tried the same thing twice without
    measurable progress, stop and either (a) ask_chris with a sharp
    specific question, or (b) park the approach in notes/learnings.md
-   and try a different angle. Never loop on the same failing approach.
+   and try a different angle. Two identical HTTP/auth/status failures
+   across ticks is already "twice"; do not spend extra ticks trying
+   variants unless new information arrived. Never loop on the same
+   failing approach.
 
 7. **Mission drift check.** Each tick, glance at MISSION.md. If your
    recent journal entries don't trace back to the mission, set
