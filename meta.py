@@ -312,20 +312,37 @@ def _is_denied(path: str) -> bool:
 
 
 def _scan_diff_for_secrets(repo: Path) -> list[str]:
-    """Scan the most recent commit's diff for secret-shaped lines.
+    """Scan the diff of every commit about to be pushed (origin/main..HEAD)
+    for secret-shaped lines. This covers the new commit plus any past
+    commits that didn't make it to origin (e.g. earlier failed pushes).
 
-    Runs against HEAD vs HEAD~1 (i.e. what we're about to push).
     Returns a list of offending line snippets; empty = clean.
+    Fail-closed: any error scanning aborts the push.
     """
+    # Refresh origin/main so the range is accurate
+    try:
+        subprocess.run(["git", "-C", str(repo), "fetch", "origin", "main"],
+                       capture_output=True, text=True, timeout=20)
+    except Exception:
+        pass  # not fatal — diff still works against last-known origin/main
+
+    # Diff origin/main..HEAD = exactly the commits we're about to push
     try:
         r = subprocess.run(
-            ["git", "-C", str(repo), "diff", "HEAD~1", "HEAD", "--unified=0"],
+            ["git", "-C", str(repo), "diff", "origin/main..HEAD", "--unified=0"],
             capture_output=True, text=True, timeout=15)
     except Exception as e:
-        # If we can't scan, abort the push (fail closed)
         return [f"could not run git diff: {e}"]
     if r.returncode != 0:
-        return [f"git diff rc={r.returncode}: {r.stderr[:200]}"]
+        # Fallback: scan just the latest commit
+        try:
+            r = subprocess.run(
+                ["git", "-C", str(repo), "diff", "HEAD~1", "HEAD", "--unified=0"],
+                capture_output=True, text=True, timeout=15)
+            if r.returncode != 0:
+                return [f"git diff (both ranges) failed: {r.stderr[:200]}"]
+        except Exception as e:
+            return [f"could not run git diff fallback: {e}"]
     hits: list[str] = []
     for line in r.stdout.splitlines():
         for pat in _SECRET_LINE_PATTERNS:
