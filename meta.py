@@ -239,6 +239,64 @@ def git_status_and_log(repo: Path) -> dict:
     return out
 
 
+def git_commit_meta_changes(repo: Path, meta_n: int, codex_summary: str = "") -> dict:
+    """Codex's sandbox mounts .git read-only on this host, so it can't
+    commit. We do the commit on its behalf — but only for files inside
+    the meta whitelist (prompts/* and config.yaml, plus state/META_REPORTS.md).
+    Anything else dirty after a meta run is a bug; we leave it untouched
+    and surface it.
+    """
+    allowed_prefixes = ("prompts/", "config.yaml", "state/META_REPORTS.md")
+    out: dict = {"committed": False, "skipped": [], "added": []}
+    try:
+        r = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
+                           capture_output=True, text=True, timeout=10)
+    except Exception as e:
+        out["error"] = f"git status: {e}"
+        return out
+    if r.returncode != 0:
+        out["error"] = f"git status rc={r.returncode}: {r.stderr[:300]}"
+        return out
+    if not r.stdout.strip():
+        out["note"] = "no changes to commit"
+        return out
+
+    to_add: list[str] = []
+    for line in r.stdout.splitlines():
+        # porcelain format: 'XY <path>' (X=staged, Y=unstaged)
+        path = line[3:].strip()
+        # untracked: '?? path'
+        if line.startswith("??"):
+            path = line[3:].strip()
+        if any(path.startswith(p) for p in allowed_prefixes):
+            to_add.append(path)
+        else:
+            out["skipped"].append(path)
+    if not to_add:
+        out["note"] = "dirty files all outside meta whitelist; refusing to commit"
+        return out
+
+    try:
+        ar = subprocess.run(["git", "-C", str(repo), "add"] + to_add,
+                            capture_output=True, text=True, timeout=10)
+        if ar.returncode != 0:
+            out["error"] = f"git add rc={ar.returncode}: {ar.stderr[:300]}"
+            return out
+        out["added"] = to_add
+        msg_first = (codex_summary.splitlines() or [""])[0][:80] if codex_summary else "auto-patch"
+        msg = f"meta #{meta_n}: {msg_first}\n\nAuto-committed by meta loop.\nFiles: {', '.join(to_add)}"
+        cr = subprocess.run(["git", "-C", str(repo), "commit", "-m", msg],
+                            capture_output=True, text=True, timeout=15)
+        if cr.returncode != 0:
+            out["error"] = f"git commit rc={cr.returncode}: {cr.stderr[:300]}"
+            return out
+        out["committed"] = True
+        out["commit_msg"] = msg
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {e}"
+    return out
+
+
 def write_full_log(logs: Path, n: int, payload: dict) -> Path | None:
     out = logs / "meta" / f"{n:08d}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -291,7 +349,13 @@ def main() -> int:
         codex_res = call_codex(meta_prompt, context, cfg, timeout_s=timeout_s)
         full["codex"] = codex_res
 
-        # Capture what codex did
+        # Codex's sandbox mounts .git read-only, so it can't commit. We
+        # commit on its behalf, only for files inside the meta whitelist.
+        commit_res = git_commit_meta_changes(paths.root, meta_n,
+                                             codex_summary=codex_res.get("stdout", "")[-2000:])
+        full["commit"] = commit_res
+
+        # Capture what was committed
         full["git"] = git_status_and_log(paths.root)
 
         wall = round(time.time() - t0, 2)
@@ -302,9 +366,20 @@ def main() -> int:
         # Telegram blow-by-blow
         log_thread = cfg["telegram"].get("log_thread_id")
         if codex_res.get("ok"):
-            recent = full["git"].get("recent_log", "?")[:300]
-            msg = (f"🧠 meta #{meta_n} · {wall}s · ok\n"
-                   f"recent commits:\n{recent}")
+            committed = commit_res.get("committed")
+            added = commit_res.get("added") or []
+            skipped = commit_res.get("skipped") or []
+            note = commit_res.get("note") or ""
+            if committed:
+                msg = (f"🧠 meta #{meta_n} · {wall}s · committed\n"
+                       f"files: {', '.join(added)[:200]}")
+            elif note == "no changes to commit":
+                msg = f"🧠 meta #{meta_n} · {wall}s · no changes (within tolerance)"
+            else:
+                detail = note or commit_res.get("error") or ""
+                msg = (f"🧠 meta #{meta_n} · {wall}s · skipped\n"
+                       f"{detail[:200]}\n"
+                       + (f"skipped: {', '.join(skipped)[:120]}" if skipped else ""))
         else:
             err = codex_res.get("error") or codex_res.get("stderr", "")[:300]
             msg = f"🧠 meta #{meta_n} · {wall}s · FAIL\n{err[:400]}"

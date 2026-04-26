@@ -85,9 +85,10 @@ When you decide to make a change:
 2. **Use standard tools available to you** (file edits, shell). You
    are running with full host access.
 
-3. **Always commit each change to git** with a descriptive message
-   prefixed `meta: ` so it's clear which changes came from the meta
-   loop. Don't push (Chris will review and push).
+3. **Don't try to `git commit` yourself.** Your sandbox mounts `.git`
+   read-only. The meta wrapper commits on your behalf after you exit,
+   restricted to a whitelist of files (`prompts/`, `config.yaml`,
+   `state/META_REPORTS.md`). Just leave your edits in the working tree.
 
 4. **Append a report** to `state/META_REPORTS.md` describing:
    - What you observed (1-3 lines)
