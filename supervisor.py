@@ -125,6 +125,14 @@ def run_scribe(cfg: dict, cfg_path: str) -> None:
                    timeout_s)
 
 
+def run_meta(cfg: dict, cfg_path: str) -> None:
+    timeout_s = cfg.get("supervisor", {}).get("meta_timeout_s", 720)
+    run_subprocess("meta",
+                   [sys.executable, str(Path(__file__).parent / "meta.py"),
+                    "--config", cfg_path],
+                   timeout_s)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
@@ -146,8 +154,10 @@ def main() -> int:
     sup = cfg.get("supervisor", {})
     tick_interval = int(sup.get("tick_interval_s", 120))
     scribe_interval = int(sup.get("scribe_interval_s", 1800))
+    meta_interval = int(sup.get("meta_interval_s", 1800))  # 30 min default
     digest_hour = int(sup.get("digest_hour_local", 8))
     scribe_enabled = bool(cfg.get("scribe", {}).get("enabled", True))
+    meta_enabled = bool(cfg.get("meta", {}).get("enabled", False))
     poll_s = 5
 
     signal.signal(signal.SIGTERM, handle_signal)
@@ -156,6 +166,7 @@ def main() -> int:
     print(f"[supervisor] starting", flush=True)
     print(f"[supervisor]   tick every {tick_interval}s", flush=True)
     print(f"[supervisor]   scribe every {scribe_interval}s ({'on' if scribe_enabled else 'off'})", flush=True)
+    print(f"[supervisor]   meta every {meta_interval}s ({'on' if meta_enabled else 'off'})", flush=True)
     print(f"[supervisor]   digest at {digest_hour:02d}:00 local", flush=True)
     print(f"[supervisor] config: {args.config}", flush=True)
     print(f"[supervisor] TZ: {os.environ.get('TZ', '(unset)')} · local now: {datetime.now().isoformat(timespec='seconds')}", flush=True)
@@ -176,6 +187,7 @@ def main() -> int:
 
     next_tick = time.time()                     # run worker immediately on boot
     next_scribe = time.time() + scribe_interval # let the worker get a head start
+    next_meta = time.time() + max(300, meta_interval // 2)  # half-interval head start
     last_digest_date = None
 
     while not SHUTDOWN.is_set():
@@ -199,6 +211,17 @@ def main() -> int:
             except Exception as e:
                 print(f"[supervisor] scribe error: {e!r}", flush=True)
             next_scribe = time.time() + scribe_interval
+            ran_something = True
+
+        # Meta tick — slow self-improvement loop. Calls Codex CLI to
+        # propose patches to prompts/config. Single-subprocess discipline
+        # means it never overlaps the worker.
+        elif meta_enabled and now >= next_meta:
+            try:
+                run_meta(cfg, args.config)
+            except Exception as e:
+                print(f"[supervisor] meta error: {e!r}", flush=True)
+            next_meta = time.time() + meta_interval
             ran_something = True
 
         # Daily digest fires at most once per local-date.

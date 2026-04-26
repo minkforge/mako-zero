@@ -32,12 +32,16 @@ else
     install -m 0644 "$SRC/scribe.py"             "$ROOT/scribe.py"
     install -m 0644 "$SRC/tg_listener.py"        "$ROOT/tg_listener.py"
     install -m 0644 "$SRC/cfg_cmd.py"            "$ROOT/cfg_cmd.py"
+    install -m 0644 "$SRC/meta.py"               "$ROOT/meta.py"
     install -m 0644 "$SRC/requirements.txt"      "$ROOT/requirements.txt"
     install -m 0644 "$SRC/config.example.yaml"   "$ROOT/config.example.yaml"
     install -m 0644 -d "$ROOT/prompts"
     install -m 0644 "$SRC/prompts/system.md"     "$ROOT/prompts/system.md"
     install -m 0644 "$SRC/prompts/compact.md"    "$ROOT/prompts/compact.md"
     install -m 0644 "$SRC/prompts/scribe.md"     "$ROOT/prompts/scribe.md"
+    install -m 0644 "$SRC/prompts/meta.md"       "$ROOT/prompts/meta.md"
+    install -m 0644 -d "$ROOT/dashboard"
+    install -m 0644 "$SRC/dashboard/server.py"   "$ROOT/dashboard/server.py"
 fi
 
 echo "==> seeding state files (idempotent — kept if already populated)"
@@ -78,8 +82,11 @@ else
     echo "    pip install failed — install requests + pyyaml manually before starting the service"
 fi
 
-echo "==> installing systemd unit"
+echo "==> installing systemd units"
 install -m 0644 "$SRC/mako-zero.service" "/etc/systemd/system/$SERVICE_NAME.service"
+if [ -f "$SRC/mako-dashboard.service" ]; then
+    install -m 0644 "$SRC/mako-dashboard.service" "/etc/systemd/system/mako-dashboard.service"
+fi
 systemctl daemon-reload
 
 echo "==> done."

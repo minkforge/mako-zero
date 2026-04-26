@@ -1,0 +1,599 @@
+#!/usr/bin/env python3
+"""mako-dashboard — small read+approve UI for Mako.
+
+Reads/writes the same state files as tick.py. Binds 127.0.0.1:8050;
+expose via SSH tunnel for V0. No DB. HTMX-poll on /now for live tape.
+
+Routes:
+- GET  /                         -> /now
+- GET  /now                      live tape + state snapshot + stats
+- GET  /api/now.json             machine-readable snapshot (HTMX poll)
+- GET  /steering                 inbox view + drop-in textarea
+- POST /steering                 append/replace INBOX.md
+- GET  /approvals                pending actions list
+- POST /approvals/{qid}/approve  execute + record
+- POST /approvals/{qid}/reject   reject + record
+- GET  /logs                     journal + metrics + last results
+- GET  /healthz                  health
+"""
+from __future__ import annotations
+
+import csv
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+# allow `import tick` and `import cfg_cmd` from the parent dir
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+import yaml  # noqa: E402
+from fastapi import FastAPI, Form, HTTPException  # noqa: E402
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse  # noqa: E402
+
+import tick as t_mod  # noqa: E402
+
+
+CONFIG_PATH = Path(os.environ.get("MAKO_CONFIG", "/srv/mako-zero/config.yaml"))
+
+
+def load_cfg() -> dict:
+    with CONFIG_PATH.open("r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def paths_root() -> Path:
+    cfg = load_cfg()
+    return Path(cfg["paths"]["root"])
+
+
+app = FastAPI(title="Mako Dashboard")
+
+
+# ---------------------------- shared HTML ------------------------------
+
+CSS = """
+:root { color-scheme: dark; --bg:#0b0b0b; --fg:#d6d6d6; --mute:#888; --acc:#22d3ee; --green:#22c55e; --red:#ef4444; --amber:#f59e0b; --b:#222; }
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: ui-monospace, 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.5; margin: 0; padding: 0; }
+header { display: flex; align-items: center; gap: 16px; padding: 8px 16px; border-bottom: 1px solid var(--b); position: sticky; top: 0; background: #0b0b0b; z-index: 10; }
+header .brand { font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #fff; }
+header nav { display: flex; gap: 4px; flex: 1; }
+header nav a { color: var(--mute); text-decoration: none; padding: 4px 10px; border: 1px solid transparent; border-radius: 2px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+header nav a:hover { color: var(--fg); background: #181818; }
+header nav a.active { color: #fff; border-color: #333; background: #111; }
+header .clock { color: var(--mute); font-size: 11px; font-variant-numeric: tabular-nums; }
+main { padding: 16px; max-width: 1400px; }
+.grid { display: grid; gap: 16px; grid-template-columns: 1fr 1fr 320px; }
+@media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
+.card { border: 1px solid var(--b); border-radius: 2px; padding: 12px; background: #0e0e0e; }
+.card h2 { margin: 0 0 10px 0; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--mute); border-bottom: 1px solid var(--b); padding-bottom: 6px; }
+pre, code { font-family: inherit; font-size: 12px; }
+pre { white-space: pre-wrap; word-break: break-word; margin: 0; }
+.tape .tick { padding: 4px 0; border-bottom: 1px solid var(--b); }
+.tape .tick:last-child { border: none; }
+.tape .tick-meta { color: var(--mute); font-size: 11px; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; font-size: 12px; }
+.kv .k { color: var(--mute); }
+.dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; vertical-align: middle; margin-right: 6px; }
+.dot.green { background: var(--green); } .dot.red { background: var(--red); } .dot.amber { background: var(--amber); }
+button, input[type=submit] { background: #111; color: var(--fg); border: 1px solid #333; border-radius: 2px; padding: 5px 12px; font-family: inherit; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; cursor: pointer; }
+button:hover, input[type=submit]:hover { background: #1a1a1a; color: #fff; }
+button.green { color: var(--green); border-color: #1a4a2a; } button.green:hover { background: #0d2418; }
+button.red { color: var(--red); border-color: #4a1d1d; } button.red:hover { background: #240d0d; }
+textarea, input[type=text] { width: 100%; background: #151515; color: var(--fg); border: 1px solid #222; border-radius: 2px; padding: 8px; font-family: inherit; font-size: 12px; resize: vertical; }
+textarea:focus, input[type=text]:focus { outline: none; border-color: #444; }
+.approval { border: 1px solid #333; padding: 12px; margin-bottom: 12px; border-radius: 2px; background: #0e0e0e; }
+.approval h3 { margin: 0 0 8px 0; font-size: 12px; }
+.approval .meta { color: var(--mute); font-size: 11px; margin-bottom: 8px; }
+.approval pre { background: #151515; padding: 8px; border-radius: 2px; }
+.approval .actions { display: flex; gap: 6px; margin-top: 10px; }
+table { border-collapse: collapse; width: 100%; font-size: 11px; }
+th, td { padding: 4px 8px; text-align: left; border-bottom: 1px solid #1a1a1a; }
+th { color: var(--mute); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
+.tabs { display: flex; gap: 2px; margin-bottom: 12px; }
+.tabs a { padding: 5px 10px; color: var(--mute); text-decoration: none; border: 1px solid transparent; border-radius: 2px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+.tabs a:hover { color: var(--fg); background: #181818; }
+.tabs a.active { color: #fff; border-color: #333; background: #111; }
+.muted { color: var(--mute); }
+.fail { color: var(--red); } .ok { color: var(--green); }
+"""
+
+
+def page(active: str, body: str, title: str = "Mako") -> str:
+    return f"""<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title}</title>
+<style>{CSS}</style>
+<script src="https://unpkg.com/htmx.org@1.9.10"></script>
+</head><body>
+<header>
+  <div class="brand">🦫 Mako</div>
+  <nav>
+    <a href="/now"       class="{'active' if active=='now' else ''}">Now</a>
+    <a href="/steering"  class="{'active' if active=='steering' else ''}">Steering</a>
+    <a href="/approvals" class="{'active' if active=='approvals' else ''}">Approvals</a>
+    <a href="/logs"      class="{'active' if active=='logs' else ''}">Logs</a>
+  </nav>
+  <span class="clock" id="nav-clock"></span>
+</header>
+<main>{body}</main>
+<script>
+function tick() {{
+  const el = document.getElementById('nav-clock');
+  if (!el) return;
+  const n = new Date();
+  const p = x => String(x).padStart(2, '0');
+  el.textContent = n.getFullYear()+'-'+p(n.getMonth()+1)+'-'+p(n.getDate())+' '+p(n.getHours())+':'+p(n.getMinutes())+':'+p(n.getSeconds());
+}}
+tick(); setInterval(tick, 1000);
+</script>
+</body></html>"""
+
+
+# ---------------------------- /now -------------------------------------
+
+def _read_recent_journal(state_dir: Path, n: int = 30) -> list[str]:
+    p = state_dir / "JOURNAL.md"
+    if not p.exists():
+        return []
+    return p.read_text(encoding="utf-8").splitlines()[-n:]
+
+
+def _metric_stats(logs_dir: Path) -> dict:
+    p = logs_dir / "metrics.csv"
+    if not p.exists():
+        return {"rows": 0}
+    walls: list[float] = []
+    parses_ok = 0
+    parses_total = 0
+    last_ts = ""
+    last_provider = ""
+    with p.open("r", encoding="utf-8") as f:
+        r = csv.DictReader(f)
+        rows = list(r)
+    if not rows:
+        return {"rows": 0}
+    for row in rows[-200:]:
+        try:
+            walls.append(float(row.get("wall_s") or 0))
+        except (ValueError, TypeError):
+            pass
+        if row.get("parse_ok") == "True":
+            parses_ok += 1
+        parses_total += 1
+    last = rows[-1]
+    last_ts = last.get("ts", "")
+    last_provider = f"{last.get('provider_used','?')}/{last.get('model_used','?')}"
+    walls_sorted = sorted(walls)
+    p95 = walls_sorted[int(len(walls_sorted) * 0.95)] if walls_sorted else 0
+    avg = sum(walls) / len(walls) if walls else 0
+    return {
+        "rows": len(rows),
+        "wall_avg": round(avg, 2),
+        "wall_p95": round(p95, 2),
+        "parse_pct": round(100 * parses_ok / parses_total, 1) if parses_total else 0,
+        "last_ts": last_ts,
+        "last_provider": last_provider,
+    }
+
+
+def _now_data() -> dict:
+    cfg = load_cfg()
+    root = paths_root()
+    state = root / "state"
+    pending_p = root / "pending" / "pending_actions.jsonl"
+    logs = root / "logs"
+
+    try:
+        tick_n = int((state / "tick_counter.txt").read_text(encoding="utf-8").strip() or "0")
+    except OSError:
+        tick_n = 0
+
+    pending_n = 0
+    if pending_p.exists():
+        pending_n = sum(1 for L in pending_p.read_text(encoding="utf-8").splitlines() if L.strip())
+
+    av = t_mod.compute_availability(cfg)
+    metrics = _metric_stats(logs)
+
+    state_md = (state / "STATE.md").read_text(encoding="utf-8") if (state / "STATE.md").exists() else "(empty)"
+    next_md = (state / "NEXT.md").read_text(encoding="utf-8") if (state / "NEXT.md").exists() else "(empty)"
+    inbox = (state / "INBOX.md").read_text(encoding="utf-8") if (state / "INBOX.md").exists() else ""
+
+    journal = _read_recent_journal(state, 25)
+
+    return {
+        "tick_n": tick_n,
+        "pending_n": pending_n,
+        "availability": av,
+        "metrics": metrics,
+        "state_md": state_md,
+        "next_md": next_md,
+        "inbox": inbox.strip(),
+        "journal": journal,
+    }
+
+
+def _now_body(d: dict) -> str:
+    journal_html = "".join(
+        f'<div class="tick"><span class="tick-meta">{line[:8]}</span> {line[9:][:200]}</div>'
+        if len(line) > 9 else f'<div class="tick">{line}</div>'
+        for line in reversed(d["journal"])
+    ) or '<div class="muted">(no journal entries yet)</div>'
+
+    av = d["availability"]
+    dot = "green" if av["in_window"] else "amber"
+    inbox_warn = (f'<div class="card" style="border-color:#4a3a1d;">'
+                  f'<h2>⚡ inbox waiting</h2>'
+                  f'<pre>{d["inbox"][:600]}</pre>'
+                  f'<div class="muted">Mako will read this on next tick.</div></div>'
+                  if d["inbox"] else "")
+
+    m = d["metrics"]
+    stats_html = f'''
+        <div class="kv">
+          <div class="k">tick</div><div>#{d["tick_n"]}</div>
+          <div class="k">pending</div><div>{d["pending_n"]} {("· awaiting your call" if d["pending_n"] else "")}</div>
+          <div class="k">availability</div><div><span class="dot {dot}"></span>{av["summary"][:80]}</div>
+          <div class="k">last tick</div><div class="muted">{m.get("last_ts","?")}</div>
+          <div class="k">provider</div><div class="muted">{m.get("last_provider","?")}</div>
+          <div class="k">wall avg</div><div>{m.get("wall_avg",0)}s · p95 {m.get("wall_p95",0)}s</div>
+          <div class="k">parse ok</div><div>{m.get("parse_pct",0)}%</div>
+          <div class="k">metrics rows</div><div class="muted">{m.get("rows",0)}</div>
+        </div>'''
+
+    return f"""
+{inbox_warn}
+<div class="grid">
+  <div class="card tape" hx-get="/api/now/tape" hx-trigger="every 10s" hx-swap="innerHTML">
+    <h2>live tape</h2>
+    {journal_html}
+  </div>
+  <div class="card">
+    <h2>state.md</h2>
+    <pre>{d["state_md"]}</pre>
+    <h2 style="margin-top:16px;">next.md</h2>
+    <pre>{d["next_md"]}</pre>
+  </div>
+  <div class="card" hx-get="/api/now/stats" hx-trigger="every 5s" hx-swap="innerHTML">
+    <h2>stats</h2>
+    {stats_html}
+  </div>
+</div>
+"""
+
+
+@app.get("/", response_class=RedirectResponse)
+def root():
+    return RedirectResponse("/now")
+
+
+@app.get("/now", response_class=HTMLResponse)
+def now():
+    d = _now_data()
+    return HTMLResponse(page("now", _now_body(d)))
+
+
+@app.get("/api/now/tape", response_class=HTMLResponse)
+def now_tape():
+    d = _now_data()
+    return HTMLResponse("".join(
+        f'<h2>live tape</h2>' if i == 0 else ""
+        for i in range(1)
+    ) + "<h2>live tape</h2>" + "".join(
+        f'<div class="tick"><span class="tick-meta">{line[:8]}</span> {line[9:][:200]}</div>'
+        if len(line) > 9 else f'<div class="tick">{line}</div>'
+        for line in reversed(d["journal"])
+    ))
+
+
+@app.get("/api/now/stats", response_class=HTMLResponse)
+def now_stats():
+    d = _now_data()
+    av = d["availability"]
+    dot = "green" if av["in_window"] else "amber"
+    m = d["metrics"]
+    return HTMLResponse(f'''<h2>stats</h2>
+        <div class="kv">
+          <div class="k">tick</div><div>#{d["tick_n"]}</div>
+          <div class="k">pending</div><div>{d["pending_n"]}</div>
+          <div class="k">availability</div><div><span class="dot {dot}"></span>{av["summary"][:80]}</div>
+          <div class="k">last tick</div><div class="muted">{m.get("last_ts","?")}</div>
+          <div class="k">provider</div><div class="muted">{m.get("last_provider","?")}</div>
+          <div class="k">wall avg</div><div>{m.get("wall_avg",0)}s · p95 {m.get("wall_p95",0)}s</div>
+          <div class="k">parse ok</div><div>{m.get("parse_pct",0)}%</div>
+          <div class="k">metrics rows</div><div class="muted">{m.get("rows",0)}</div>
+        </div>''')
+
+
+@app.get("/api/now.json")
+def now_json():
+    return JSONResponse(_now_data())
+
+
+# ---------------------------- /steering --------------------------------
+
+@app.get("/steering", response_class=HTMLResponse)
+def steering():
+    root = paths_root()
+    inbox_p = root / "state" / "INBOX.md"
+    inbox = inbox_p.read_text(encoding="utf-8") if inbox_p.exists() else ""
+
+    archive_dir = root / "archive"
+    recent_archives = []
+    if archive_dir.exists():
+        for p in sorted(archive_dir.glob("inbox-*.md"), key=lambda x: x.stat().st_mtime, reverse=True)[:10]:
+            try:
+                first = p.read_text(encoding="utf-8").strip().splitlines()[:2]
+                preview = " · ".join(first)[:120]
+            except OSError:
+                preview = "?"
+            recent_archives.append((p.name, preview))
+
+    archives_html = "".join(
+        f'<div class="tick"><span class="tick-meta">{n}</span> {p}</div>'
+        for n, p in recent_archives
+    ) or '<div class="muted">(no archives yet)</div>'
+
+    body = f"""
+<div class="grid" style="grid-template-columns: 2fr 1fr;">
+  <div class="card">
+    <h2>drop-in steering</h2>
+    <p class="muted" style="margin: 0 0 8px 0;">Mako reads this on his next tick. Append adds to existing inbox; replace overwrites.</p>
+    <form method="post" action="/steering">
+      <textarea name="text" rows="8" placeholder="Type a steering note. Markdown / plain text both fine."></textarea>
+      <div style="margin-top: 8px; display: flex; gap: 6px;">
+        <button type="submit" name="mode" value="append">append</button>
+        <button type="submit" name="mode" value="replace" class="red">replace (clear first)</button>
+      </div>
+    </form>
+  </div>
+  <div class="card">
+    <h2>inbox right now</h2>
+    {f'<pre>{inbox.strip()}</pre>' if inbox.strip() else '<div class="muted">(empty — Mako has nothing new to read)</div>'}
+    <h2 style="margin-top: 16px;">recent inboxes (archived)</h2>
+    {archives_html}
+  </div>
+</div>
+"""
+    return HTMLResponse(page("steering", body))
+
+
+@app.post("/steering")
+def steering_post(text: str = Form(...), mode: str = Form("append")):
+    root = paths_root()
+    inbox = root / "state" / "INBOX.md"
+    archive = root / "archive"
+    archive.mkdir(parents=True, exist_ok=True)
+    text = text.strip()
+    if not text:
+        return RedirectResponse("/steering", status_code=303)
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    if mode == "replace":
+        if inbox.exists() and inbox.read_text(encoding="utf-8").strip():
+            (archive / f"inbox-{ts}.md").write_text(inbox.read_text(encoding="utf-8"), encoding="utf-8")
+        inbox.write_text(f"[dashboard · {datetime.now().isoformat(timespec='minutes')}]\n{text}\n", encoding="utf-8")
+    else:
+        with inbox.open("a", encoding="utf-8") as f:
+            f.write(f"\n[dashboard · {datetime.now().isoformat(timespec='minutes')}]\n{text}\n")
+    return RedirectResponse("/steering", status_code=303)
+
+
+# ---------------------------- /approvals -------------------------------
+
+def _read_pending(root: Path) -> list[dict]:
+    p = root / "pending" / "pending_actions.jsonl"
+    if not p.exists():
+        return []
+    out = []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
+def _split_pending(root: Path, qid: str) -> tuple[dict | None, list[str]]:
+    p = root / "pending" / "pending_actions.jsonl"
+    if not p.exists():
+        return None, []
+    matched: dict | None = None
+    others: list[str] = []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            others.append(line)
+            continue
+        if rec.get("id") == qid and matched is None:
+            matched = rec
+        else:
+            others.append(line)
+    return matched, others
+
+
+def _write_remaining(root: Path, kept: list[str]) -> None:
+    p = root / "pending" / "pending_actions.jsonl"
+    p.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+
+
+def _append_decision(root: Path, decision: dict) -> None:
+    p = root / "pending" / "decisions.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(decision, ensure_ascii=False) + "\n")
+
+
+def _append_inbox(root: Path, text: str) -> None:
+    p = root / "state" / "INBOX.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as f:
+        f.write(text)
+
+
+@app.get("/approvals", response_class=HTMLResponse)
+def approvals():
+    root = paths_root()
+    pending = _read_pending(root)
+    if not pending:
+        body = '<div class="card"><h2>approvals</h2><div class="muted">(no pending actions — Mako is unblocked)</div></div>'
+    else:
+        rows = []
+        for rec in pending:
+            qid = rec.get("id", "?")
+            queued = rec.get("queued_at", "?")
+            a = rec.get("action", {})
+            a_type = a.get("type", "?")
+            body_preview = json.dumps(a, ensure_ascii=False, indent=2)[:1200]
+            rows.append(f"""
+<div class="approval">
+  <h3>⏸ {qid} · {a_type}</h3>
+  <div class="meta">queued: {queued}</div>
+  <pre>{body_preview}</pre>
+  <div class="actions">
+    <form method="post" action="/approvals/{qid}/approve" style="display:inline;">
+      <button type="submit" class="green">✓ approve</button>
+    </form>
+    <form method="post" action="/approvals/{qid}/reject" style="display:inline;">
+      <input type="text" name="reason" placeholder="reject reason (optional)" style="width: 280px; display: inline-block;">
+      <button type="submit" class="red">✗ reject</button>
+    </form>
+  </div>
+</div>""")
+        body = '<div class="card"><h2>approvals</h2>' + "".join(rows) + "</div>"
+    return HTMLResponse(page("approvals", body))
+
+
+@app.post("/approvals/{qid}/approve")
+def approve(qid: str):
+    cfg = load_cfg()
+    root = paths_root()
+    rec, others = _split_pending(root, qid)
+    if rec is None:
+        raise HTTPException(404, f"{qid} not found in pending")
+    action = rec.get("action") or {}
+    a_type = action.get("type", "?")
+    paths = t_mod.Paths(cfg)
+    result = t_mod.execute_gated_action(cfg, paths, action)
+    decision = {"id": qid, "decided_at": t_mod.now_iso(),
+                "decision": "approve", "by": "dashboard",
+                "action": action, "result": result}
+    _append_decision(root, decision)
+    _write_remaining(root, others)
+    ok_marker = "✅" if result.get("ok") else "❌"
+    _append_inbox(root, (
+        f"\n[approval · {qid} · {a_type}] {ok_marker} executed (via dashboard)\n"
+        f"action: {json.dumps(action, ensure_ascii=False)[:600]}\n"
+        f"result: {json.dumps(result, ensure_ascii=False)[:500]}\n"
+    ))
+    # Mirror to Telegram so the channel reflects reality
+    try:
+        approvals_thread = (cfg["telegram"].get("approvals_thread_id")
+                            or cfg["telegram"].get("log_thread_id"))
+        t_mod.telegram_send(cfg, f"{ok_marker} {qid} · {a_type} (dashboard)\n"
+                                 f"{(result.get('error') or 'ok')[:200]}",
+                            thread_id=approvals_thread, label="dash-approve")
+    except Exception:
+        pass
+    return RedirectResponse("/approvals", status_code=303)
+
+
+@app.post("/approvals/{qid}/reject")
+def reject(qid: str, reason: str = Form("")):
+    cfg = load_cfg()
+    root = paths_root()
+    rec, others = _split_pending(root, qid)
+    if rec is None:
+        raise HTTPException(404, f"{qid} not found in pending")
+    action = rec.get("action") or {}
+    a_type = action.get("type", "?")
+    decision = {"id": qid, "decided_at": t_mod.now_iso(),
+                "decision": "reject", "by": "dashboard",
+                "reason": reason, "action": action}
+    _append_decision(root, decision)
+    _write_remaining(root, others)
+    _append_inbox(root, (
+        f"\n[approval · {qid} · {a_type}] ❎ rejected by Chris (via dashboard)\n"
+        f"reason: {reason or '(no reason given)'}\n"
+        f"action was: {json.dumps(action, ensure_ascii=False)[:400]}\n"
+    ))
+    try:
+        approvals_thread = (cfg["telegram"].get("approvals_thread_id")
+                            or cfg["telegram"].get("log_thread_id"))
+        t_mod.telegram_send(cfg, f"❎ {qid} · {a_type} · rejected (dashboard)"
+                            + (f"\nreason: {reason[:200]}" if reason else ""),
+                            thread_id=approvals_thread, label="dash-reject")
+    except Exception:
+        pass
+    return RedirectResponse("/approvals", status_code=303)
+
+
+# ---------------------------- /logs ------------------------------------
+
+@app.get("/logs", response_class=HTMLResponse)
+def logs(tab: str = "journal"):
+    root = paths_root()
+    state = root / "state"
+    logs_dir = root / "logs"
+
+    tabs_html = (
+        f'<div class="tabs">'
+        f'<a href="/logs?tab=journal" class="{"active" if tab=="journal" else ""}">Journal</a>'
+        f'<a href="/logs?tab=metrics" class="{"active" if tab=="metrics" else ""}">Metrics</a>'
+        f'<a href="/logs?tab=last" class="{"active" if tab=="last" else ""}">Last results</a>'
+        f'</div>'
+    )
+
+    if tab == "journal":
+        j = state / "JOURNAL.md"
+        body_lines = j.read_text(encoding="utf-8").splitlines()[-200:] if j.exists() else []
+        inner = "<pre>" + "\n".join(body_lines) + "</pre>" if body_lines else '<div class="muted">(empty)</div>'
+    elif tab == "metrics":
+        m = logs_dir / "metrics.csv"
+        if not m.exists():
+            inner = '<div class="muted">(no metrics yet)</div>'
+        else:
+            with m.open("r", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))[-100:]
+            if not rows:
+                inner = '<div class="muted">(no rows)</div>'
+            else:
+                cols = ["ts", "tick_n", "mode", "wall_s", "provider_used", "model_used",
+                        "input_tokens_est", "output_chars", "actions_executed", "actions_queued",
+                        "parse_ok", "drift_flag"]
+                head = "".join(f"<th>{c}</th>" for c in cols)
+                trs = "".join(
+                    "<tr>" + "".join(f'<td>{(r.get(c) or "")[:80]}</td>' for c in cols) + "</tr>"
+                    for r in reversed(rows)
+                )
+                inner = f"<table><thead><tr>{head}</tr></thead><tbody>{trs}</tbody></table>"
+    else:
+        last = state / "LAST_RESULTS.md"
+        text = last.read_text(encoding="utf-8") if last.exists() else "(no LAST_RESULTS.md)"
+        inner = f"<pre>{text}</pre>"
+
+    body = f'<div class="card"><h2>logs</h2>{tabs_html}{inner}</div>'
+    return HTMLResponse(page("logs", body))
+
+
+@app.get("/healthz")
+def health():
+    return {"ok": True}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    host = os.environ.get("MAKO_DASH_HOST", "127.0.0.1")
+    port = int(os.environ.get("MAKO_DASH_PORT", "8050"))
+    uvicorn.run(app, host=host, port=port, log_level="info")

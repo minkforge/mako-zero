@@ -80,6 +80,17 @@ supervisor:
   digest_timeout_s: 60
   scribe_interval_s: 7200      # 2 hours — scribe runs between worker ticks
   scribe_timeout_s: 240        # writing-heavy, can be slower than worker tick
+  meta_interval_s: 1800        # 30 min — meta loop cadence (when enabled)
+  meta_timeout_s: 720          # codex can be slow — 12 min ceiling
+
+# Meta loop — third process that runs Codex on the box every meta_interval_s
+# to propose small patches to prompts/ and config.yaml. Off by default; set
+# enabled: true once you've confirmed `codex` is on PATH and willing to run
+# without interactive prompts.
+meta:
+  enabled: false
+  codex_model: gpt-5.5
+  timeout_s: 600
 
 scribe:
   enabled: true

@@ -1,0 +1,21 @@
+[Unit]
+Description=Mako Dashboard — read+approve UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/mako-zero
+ExecStart=/usr/bin/python3 /srv/mako-zero/dashboard/server.py
+Environment=MAKO_CONFIG=/srv/mako-zero/config.yaml
+Environment=MAKO_DASH_HOST=127.0.0.1
+Environment=MAKO_DASH_PORT=8050
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+MemoryMax=512M
+CPUQuota=100%
+
+[Install]
+WantedBy=multi-user.target
