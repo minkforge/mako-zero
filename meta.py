@@ -276,6 +276,26 @@ def git_status_and_log(repo: Path) -> dict:
     return out
 
 
+def latest_meta_report_summary(reports_path: Path, max_chars: int = 900) -> str:
+    """Return the newest META_REPORTS entry, trimmed for Telegram."""
+    try:
+        text = reports_path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+    if not text:
+        return ""
+    marker = "\n## meta tick "
+    idx = text.rfind(marker)
+    block = text[idx + 1:] if idx >= 0 else text
+    lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+    if lines and lines[0].startswith("## "):
+        lines = lines[1:]
+    summary = "\n".join(lines).strip()
+    if len(summary) <= max_chars:
+        return summary
+    return summary[: max_chars - 1].rstrip() + "…"
+
+
 # Files / dirs meta must NEVER auto-commit, even if Codex stages them.
 # .gitignore already excludes most of these — this is belt-and-braces.
 _DENY_PATHS = (
@@ -553,6 +573,7 @@ def main() -> int:
             added = commit_res.get("added") or []
             skipped = commit_res.get("skipped") or []
             note = commit_res.get("note") or ""
+            report_summary = latest_meta_report_summary(paths.state / "META_REPORTS.md")
             if committed and pushed:
                 msg = (f"🧠 meta #{meta_n} · {wall}s · committed + pushed\n"
                        f"files: {', '.join(added)[:200]}")
@@ -574,6 +595,8 @@ def main() -> int:
                 msg = (f"🧠 meta #{meta_n} · {wall}s · skipped\n"
                        f"{detail[:200]}\n"
                        + (f"skipped: {', '.join(skipped)[:120]}" if skipped else ""))
+            if report_summary:
+                msg = f"{msg}\n\nsummary:\n{report_summary}"
         else:
             err = codex_res.get("error") or codex_res.get("stderr", "")[:300]
             msg = f"🧠 meta #{meta_n} · {wall}s · FAIL\n{err[:400]}"
