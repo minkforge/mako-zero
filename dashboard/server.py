@@ -98,10 +98,10 @@ app = FastAPI(title="Mako Dashboard")
 # ---------------------------- shared HTML ------------------------------
 
 CSS = """
-:root { color-scheme: dark; --bg:#0b0b0b; --fg:#d6d6d6; --mute:#888; --acc:#22d3ee; --green:#22c55e; --red:#ef4444; --amber:#f59e0b; --b:#222; }
+:root { color-scheme: dark; --bg:#000; --fg:#d6d6d6; --mute:#888; --acc:#22d3ee; --green:#22c55e; --red:#ef4444; --amber:#f59e0b; --b:#222; }
 * { box-sizing: border-box; }
 body { background: var(--bg); color: var(--fg); font-family: ui-monospace, 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.5; margin: 0; padding: 0; }
-header { display: flex; align-items: center; gap: 16px; padding: 8px 16px; border-bottom: 1px solid var(--b); position: sticky; top: 0; background: #0b0b0b; z-index: 10; }
+header { display: flex; align-items: center; gap: 16px; padding: 8px 16px; border-bottom: 1px solid var(--b); position: sticky; top: 0; background: #000; z-index: 10; }
 header .brand { font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #fff; }
 header nav { display: flex; gap: 4px; flex: 1; }
 header nav a { color: var(--mute); text-decoration: none; padding: 4px 10px; border: 1px solid transparent; border-radius: 2px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
