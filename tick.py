@@ -980,8 +980,8 @@ def queue_resource_request(cfg: dict, paths: Paths, action: dict) -> dict:
 # ----------------- non-gated dispatcher --------------------------------
 
 NON_GATED = {"shell", "http_get", "write_file", "read_file", "git",
-             "telegram_post", "ask_chris"}
-GATED = {"email_send", "cf_api", "http_post", "http_put", "http_delete", "spend"}
+             "telegram_post", "ask_chris", "cf_api"}
+GATED = {"email_send", "http_post", "http_put", "http_delete", "spend"}
 
 
 def dispatch_action(cfg: dict, paths: Paths, action: dict) -> dict:
@@ -1002,6 +1002,8 @@ def dispatch_action(cfg: dict, paths: Paths, action: dict) -> dict:
         return exec_read_file(cfg, paths, action)
     if t == "git":
         return exec_git(cfg, paths, action)
+    if t == "cf_api":
+        return exec_cf_api(cfg, action)
     if t == "telegram_post":
         return exec_telegram_post(cfg, action)
     if t == "ask_chris":
