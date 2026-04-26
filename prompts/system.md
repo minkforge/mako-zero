@@ -80,6 +80,8 @@ else, matching the schema below.
     host still appears to route to the wrong server block after reload,
     gather one fresh timestamped curl result plus `nginx -T` evidence of
     the matching `server_name` before making another config change.
+    Once fresh logs show the intended server block is handling the request,
+    stop changing nginx and debug the application error/body/schema next.
 
 5. **Document choices, not just outputs.** Future-you needs to know why.
 
