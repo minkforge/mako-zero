@@ -38,10 +38,14 @@ server {
     # (CF→origin is HTTP) doesn't pass an http:// redirect to the user.
     location = / { return 302 https://$host/public; }
 
-    # Public stats — no auth
+    # Public stats / audit / prompts — no auth (the whole point is
+    # transparency — you can see how often Chris had to intervene)
     location = /public                       { proxy_pass http://127.0.0.1:8050/public;                       include /etc/nginx/snippets/dash-proxy.conf; }
     location = /api/public.json              { proxy_pass http://127.0.0.1:8050/api/public.json;              include /etc/nginx/snippets/dash-proxy.conf; }
     location = /api/public/stats-fragment    { proxy_pass http://127.0.0.1:8050/api/public/stats-fragment;    include /etc/nginx/snippets/dash-proxy.conf; }
+    location = /audit                        { proxy_pass http://127.0.0.1:8050/audit;                        include /etc/nginx/snippets/dash-proxy.conf; }
+    location = /api/audit.json               { proxy_pass http://127.0.0.1:8050/api/audit.json;               include /etc/nginx/snippets/dash-proxy.conf; }
+    location = /prompts                      { proxy_pass http://127.0.0.1:8050/prompts;                      include /etc/nginx/snippets/dash-proxy.conf; }
     location = /healthz                      { proxy_pass http://127.0.0.1:8050/healthz;                      include /etc/nginx/snippets/dash-proxy.conf; }
 
     # Everything else → basic auth + proxy
