@@ -314,8 +314,13 @@ def telegram_poller(cfg: dict, paths_root: Path, shutdown: threading.Event,
                         reply = f"❌ command error: {type(e).__name__}: {e}"
                     if reply is not None:
                         try:
+                            # Pass thread_id_raw directly, NOT `or None`:
+                            # - 0 (= general thread) → telegram_send leaves
+                            #   message_thread_id off the payload → reply lands
+                            #   back in general where the user typed.
+                            # - None would fall through to log_thread_id default.
                             t_mod.telegram_send(cfg, reply,
-                                                thread_id=thread_id_raw or None,
+                                                thread_id=thread_id_raw,
                                                 label="cmd")
                         except Exception as e:
                             log(f"[tg-listener] reply send failed: {e!r}")
@@ -364,7 +369,7 @@ def telegram_poller(cfg: dict, paths_root: Path, shutdown: threading.Event,
                         try:
                             import tick as t_mod
                             t_mod.telegram_send(cfg, f"{marker} · {rid} captured",
-                                                thread_id=thread_id_raw or None,
+                                                thread_id=thread_id_raw,
                                                 label="request-update")
                         except Exception:
                             pass
@@ -389,7 +394,7 @@ def telegram_poller(cfg: dict, paths_root: Path, shutdown: threading.Event,
                         if intent != "none":
                             try:
                                 _handle_approval(cfg, paths_root, qid, intent,
-                                                 reason, thread_id_raw or None, log)
+                                                 reason, thread_id_raw, log)
                             except Exception as e:
                                 log(f"[tg-listener] approval handler error: {e!r}")
                             wrote_any = True
