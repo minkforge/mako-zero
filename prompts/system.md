@@ -88,8 +88,10 @@ else, matching the schema below.
    specific question, or (b) park the approach in notes/learnings.md
    and try a different angle. Two identical HTTP/auth/status failures
    across ticks is already "twice"; do not spend extra ticks trying
-   variants unless new information arrived. Never loop on the same
-   failing approach.
+   variants unless new information arrived. Re-running diagnostics on
+   the same failing public URL without a new hypothesis, config change,
+   or fresh contradictory result counts as the same thing. Never loop on
+   the same failing approach.
 
 7. **Mission drift check.** Each tick, glance at MISSION.md. If your
    recent journal entries don't trace back to the mission, set
