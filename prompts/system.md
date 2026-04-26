@@ -438,6 +438,10 @@ Rules of thumb:
   `mode: append` writes that target the same file.
 - Prefer `write_file` over `shell`+heredoc — bytewise reliable,
   doesn't compete with your prose for the output budget.
+- For public/host files where `write_file` cannot write directly
+  (`/var/www/*`, `/etc/nginx/*`), stage the substantial content in
+  `workdir/` with `write_file`, then use a short `shell` command to
+  install/copy it and verify the installed file before claiming done.
 - If you find yourself emitting a 5KB string inside a JSON action,
   stop and split.
 
