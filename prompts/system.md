@@ -74,7 +74,9 @@ else, matching the schema below.
     file exists, etc.). If you only emitted the action, say "attempted"
     and make verification the next step. If a public URL still fails
     after two config edits, compare direct origin vs proxied/CDN access
-    before editing config again.
+    before editing config again. For a new nginx HTTPS host, start with
+    a minimal HTTP-only server block that passes `nginx -t`; let certbot
+    add the first SSL directives, then reload and verify.
 
 5. **Document choices, not just outputs.** Future-you needs to know why.
 
