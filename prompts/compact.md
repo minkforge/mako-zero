@@ -10,8 +10,9 @@ Your tasks this tick:
 
 1. **Distil JOURNAL.md into 3–7 durable lessons** and append them to
    `notes/learnings.md` (mode: append). Lessons are short, specific,
-   and useful for future-you. Not "I should research more" but "Reddit
-   r/SideProject moderation is strict — read sidebar before posting."
+   and useful for future-you. Not "I should research more" but
+   "Cloudflare DNS API rejects A records when content is empty — must
+   include `content` field even on PATCH."
 
 2. **Trim JOURNAL.md to its last 10 lines.** Write the trimmed lines to
    `archive/journal-{YYYY-MM-DD-HH}.md` (mode: write).
