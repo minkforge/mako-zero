@@ -18,6 +18,7 @@ Routes:
 """
 from __future__ import annotations
 
+import base64
 import csv
 import json
 import os
@@ -28,6 +29,23 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 LONDON = ZoneInfo("Europe/London")
+
+# Mako portrait — pixel-art mink with shades. Lazy-loaded once, cached
+# as a data URI so we can inline it in every HTML response without
+# adding an extra round-trip or needing a public nginx /static/ rule.
+_MAKO_IMG_PATH = Path(__file__).parent / "static" / "mako.png"
+_MAKO_IMG_URI: str | None = None
+
+
+def mako_img_uri() -> str:
+    global _MAKO_IMG_URI
+    if _MAKO_IMG_URI is None:
+        try:
+            data = _MAKO_IMG_PATH.read_bytes()
+            _MAKO_IMG_URI = "data:image/png;base64," + base64.b64encode(data).decode("ascii")
+        except OSError:
+            _MAKO_IMG_URI = ""  # cached miss; degrade gracefully to text-only brand
+    return _MAKO_IMG_URI
 
 
 def _fmt_london(ts: str) -> str:
@@ -127,23 +145,46 @@ th { color: var(--mute); font-weight: 600; text-transform: uppercase; letter-spa
 """
 
 
-def page(active: str, body: str, title: str = "Mako") -> str:
+def page(active: str, body: str, title: str = "Mako", public: bool = False) -> str:
+    """Render the dashboard chrome.
+
+    `public=True` renders only public links (Stats, Audit, Prompts, source) — use
+    for /audit, /prompts, etc. that nginx serves without auth. The default
+    (gated) renders the admin nav (Now, Steering, Approvals, Logs) — those
+    routes are behind basic auth, so showing those links to a logged-in user
+    is fine; showing them on a public page produces a basic-auth popup on
+    click, which is bad UX.
+    """
+    img = mako_img_uri()
+    brand_inner = (f'<img src="{img}" alt="" class="brand-img">Mako'
+                   if img else "🦫 Mako")
+    if public:
+        nav = (
+            f'<a href="/public" class="{"active" if active=="public" else ""}">Stats</a>'
+            f'<a href="/audit"  class="{"active" if active=="audit"  else ""}">Audit</a>'
+            f'<a href="/prompts" class="{"active" if active=="prompts" else ""}">Prompts</a>'
+            f'<a href="https://github.com/minkforge/mako-zero" target="_blank" rel="noopener">Source</a>'
+        )
+    else:
+        nav = (
+            f'<a href="/now"       class="{"active" if active=="now" else ""}">Now</a>'
+            f'<a href="/steering"  class="{"active" if active=="steering" else ""}">Steering</a>'
+            f'<a href="/approvals" class="{"active" if active=="approvals" else ""}">Approvals</a>'
+            f'<a href="/logs"      class="{"active" if active=="logs" else ""}">Logs</a>'
+        )
     return f"""<!doctype html>
 <html><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title}</title>
-<style>{CSS}</style>
+<style>{CSS}
+.brand-img {{ width: 22px; height: 22px; image-rendering: pixelated; vertical-align: middle; margin-right: 6px; border-radius: 2px; }}
+</style>
 <script src="https://unpkg.com/htmx.org@1.9.10"></script>
 </head><body>
 <header>
-  <div class="brand">🦫 Mako</div>
-  <nav>
-    <a href="/now"       class="{'active' if active=='now' else ''}">Now</a>
-    <a href="/steering"  class="{'active' if active=='steering' else ''}">Steering</a>
-    <a href="/approvals" class="{'active' if active=='approvals' else ''}">Approvals</a>
-    <a href="/logs"      class="{'active' if active=='logs' else ''}">Logs</a>
-  </nav>
+  <div class="brand">{brand_inner}</div>
+  <nav>{nav}</nav>
   <span class="clock" id="nav-clock"></span>
 </header>
 <main>{body}</main>
@@ -689,7 +730,7 @@ def audit():
   {body_inner}
 </div>
 """
-    return HTMLResponse(page("audit", body))
+    return HTMLResponse(page("audit", body, public=True))
 
 
 @app.get("/api/audit.json")
@@ -802,6 +843,9 @@ def public_json():
 def public_page():
     s = _public_stats()
     mtd_pct = round(100 * s["mtd_pence"] / max(1, s["mtd_ceiling_pence"]), 1)
+    img = mako_img_uri()
+    portrait = (f'<img src="{img}" alt="Mako, a pixel-art mink wearing sunglasses" '
+                f'class="hero-img">' if img else '')
     body = f"""<!doctype html>
 <html><head>
 <meta charset="utf-8">
@@ -809,6 +853,7 @@ def public_page():
 <title>Mako · live</title>
 <style>{CSS}
 .hero {{ text-align: center; padding: 40px 16px; }}
+.hero-img {{ width: 144px; height: 144px; image-rendering: pixelated; border-radius: 4px; margin: 0 auto 16px; display: block; }}
 .hero h1 {{ font-size: 32px; letter-spacing: 0.04em; margin: 0 0 8px 0; color: #fff; }}
 .hero .sub {{ color: var(--mute); font-size: 13px; max-width: 580px; margin: 0 auto; line-height: 1.6; }}
 .hero .links {{ margin-top: 16px; }}
@@ -826,7 +871,8 @@ def public_page():
 </style>
 </head><body>
 <div class="hero">
-  <h1>🦫 mako</h1>
+  {portrait}
+  <h1>mako</h1>
   <div class="sub">An AI agent trying to make £100/month online — building, journaling, and failing in public. Runs on a single VPS, ticks every few minutes, documents everything.</div>
   <div class="links">
     <a href="/audit">audit log</a>
@@ -1005,10 +1051,11 @@ def prompts_page():
 .prompt-body pre {{ background: #151515; padding: 10px; border-radius: 2px; overflow-x: auto; font-size: 11px; }}
 .prompt-body pre code {{ padding: 0; background: none; }}
 .prompt-body ul {{ padding-left: 22px; }}
+.brand-img {{ width: 22px; height: 22px; image-rendering: pixelated; vertical-align: middle; margin-right: 6px; border-radius: 2px; }}
 </style>
 </head><body>
 <header>
-  <div class="brand">🦫 Mako · prompts</div>
+  <div class="brand">{f'<img src="{mako_img_uri()}" alt="" class="brand-img">' if mako_img_uri() else '🦫 '}Mako · prompts</div>
   <nav><a href="/public">stats</a><a href="/audit">audit</a><a href="https://github.com/minkforge/mako-zero">source</a></nav>
 </header>
 <main class="prompts-wrap">

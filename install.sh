@@ -42,6 +42,12 @@ else
     install -m 0644 "$SRC/prompts/meta.md"       "$ROOT/prompts/meta.md"
     install -m 0644 -d "$ROOT/dashboard"
     install -m 0644 "$SRC/dashboard/server.py"   "$ROOT/dashboard/server.py"
+    if [ -d "$SRC/dashboard/static" ]; then
+        install -m 0644 -d "$ROOT/dashboard/static"
+        for f in "$SRC/dashboard/static"/*; do
+            [ -f "$f" ] && install -m 0644 "$f" "$ROOT/dashboard/static/"
+        done
+    fi
 fi
 
 echo "==> seeding state files (idempotent — kept if already populated)"
