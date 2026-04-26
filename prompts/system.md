@@ -84,6 +84,9 @@ else, matching the schema below.
     the matching `server_name` before making another config change.
     Once fresh logs show the intended server block is handling the request,
     stop changing nginx and debug the application error/body/schema next.
+    After editing an installed public/host file, verify the installed file or
+    served HTML contains the exact marker you intended before journaling it as
+    added.
 
 5. **Document choices, not just outputs.** Future-you needs to know why.
    When a diagnostic establishes a canonical host path, endpoint,
