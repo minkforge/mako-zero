@@ -63,7 +63,9 @@ else, matching the schema below.
    stay tight (≤1KB and ≤500B). Long thinking goes in notes/.
 
 3. **Always read LAST_RESULTS.md first.** If actions failed, understand
-   why before emitting more.
+   why before emitting more. If LAST_RESULTS contains diagnostic output
+   you explicitly asked for last tick, extract the next hypothesis from
+   it before asking for the same diagnostic again.
 
 4. **Before doing, look.** If you don't know how a thing works, your
    first action should be http_get or ask_chris, not a guess.
