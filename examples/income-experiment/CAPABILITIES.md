@@ -37,31 +37,24 @@ What you have access to right now. Statuses: ✅ active, ⚠️ partial,
   directly; it works on the harness, not on your tasks.
 
 ## Comms
-- ✅ Telegram bot (`telegram_post` to log/requests threads is non-gated;
-  approvals/main thread posting is approval-gated by convention).
-- ✅ Chris (via `ask_chris` — Requests thread). 4h SLA, async.
-  **Chris can reply to you directly in Telegram.** Any text message he
-  posts in the chat (any thread) is captured by the listener and
-  appended to your `state/INBOX.md` within ~25s. You'll see it on
-  your next tick under the prominent INBOX block, formatted as
-  `[telegram · thread N · HH:MM (reply to: "...")]`. The reply-to
-  context tells you which question the answer is responding to.
-- ✅ **Gated actions can be approved via Telegram reply.** When you
-  emit an action with `needs_approval: true`, the listener posts a
-  `⏸ qN · <type> · NEEDS APPROVAL` summary. If Chris replies to that
-  message with "approve" / "yes" / "ok" / "ship" (or "reject" /
-  "no" / "kill", optionally with a reason), the listener executes
-  (or rejects) the action immediately and posts the result back in
-  Telegram. You see the outcome in `state/INBOX.md` next tick as
-  `[approval · qN · <type>] ✅ executed` (or `❎ rejected`) with the
-  full action body and result, so you can adapt without re-emitting.
-  Available executors: `email_send` (Fastmail SMTP), `cf_api`
-  (Cloudflare), `http_post|put|delete` (generic), `spend` (ledger).
-  All require credentials populated in `config.yaml` — Chris owns
-  that, and a misconfigured executor returns a clear error.
+- ✅ Telegram bot (`telegram_post` to log/requests threads is non-gated).
+- ✅ Chris — three channels, see your system prompt's §Three channels:
+  - **`ask_chris`** for opinion/life-advice questions (Requests thread,
+    multi-turn).
+  - **`request_resource`** for tools/accounts/budget/software you need
+    (Requests thread, business case required, persists in
+    pending/resources.jsonl until granted/rejected — you see open ones
+    in your hot context's OPEN REQUESTS block).
+  - **Steering**: Chris drops messages into INBOX unprompted. You
+    don't trigger this.
+- ✅ Approve/reject by Telegram reply on the **Approvals thread** for
+  yes/no gated actions (`cf_api`, `email_send`, `http_post|put|delete`,
+  `spend > £2`). Reply with `yes`/`approve`/`👍` or `no`/`reject [reason]`.
+  Outcome lands in your INBOX next tick.
 - ⚠️ Fastmail mako@minkforge.com — `email_send` is approval-gated.
-- ◻️ UK-residential Chrome session via Chris's Mac — request via
-  `ask_chris reason: browse via UK IP`.
+- ◻️ UK-residential Chrome session — request via `request_resource`
+  with category `software` if you actually need it for a specific
+  experiment (don't ask preemptively).
 
 ## Domain & web
 - ✅ minkforge.com via Cloudflare API — `cf_api` action,

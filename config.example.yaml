@@ -99,6 +99,8 @@ scribe:
   recent_journal_lines: 100    # full picture, not just last 20
   max_drafts_per_run: 1        # avoid flooding the outbox
   approval_thread: approvals   # approvals | requests | log
+  daily_publish_cap: 2         # max blog posts auto-published per UTC day
+  publish_dir: /var/www/html/blog  # nginx-served path for the static site
 
 # Chris's working hours. Mako sees this in hot context and is told to defer
 # approval-needing work outside the window. Approval pings still queue

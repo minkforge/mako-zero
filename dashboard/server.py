@@ -592,6 +592,409 @@ def health():
     return {"ok": True}
 
 
+# ---------------------------- /audit -----------------------------------
+# Public audit log — shows every Chris intervention so the "how
+# autonomous is this thing actually" question has a verifiable answer.
+# Secrets are never written to logs/audit.jsonl in the first place;
+# we redact defensively here too.
+
+def _read_audit(root: Path, n: int = 200) -> list[dict]:
+    p = root / "logs" / "audit.jsonl"
+    if not p.exists():
+        return []
+    rows = []
+    for line in p.read_text(encoding="utf-8").splitlines()[-n:]:
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
+@app.get("/audit", response_class=HTMLResponse)
+def audit():
+    root = paths_root()
+    rows = list(reversed(_read_audit(root, 500)))
+    if not rows:
+        body_inner = '<div class="muted">(audit log empty — no Chris interventions yet)</div>'
+    else:
+        # Group counts by kind
+        from collections import Counter
+        c = Counter(r.get("kind", "?") for r in rows)
+        summary = " · ".join(f"{k}: {v}" for k, v in c.most_common())
+        items = []
+        for r in rows[:300]:
+            ts = r.get("ts", "")[:19]
+            kind = r.get("kind", "?")
+            by = r.get("by", "?")
+            payload = {k: v for k, v in r.items() if k not in ("ts", "kind", "by")}
+            items.append(f'<div class="audit-row">'
+                         f'<span class="audit-ts">{ts}</span> '
+                         f'<span class="audit-kind audit-{kind}">{kind}</span> '
+                         f'<span class="audit-by">via {by}</span>'
+                         f'<pre>{json.dumps(payload, ensure_ascii=False, indent=2)[:1200]}</pre>'
+                         f'</div>')
+        body_inner = (f'<div class="muted">{summary}</div>'
+                      f'<div class="audit-list">{"".join(items)}</div>')
+
+    body = f"""
+<style>
+.audit-row {{ border-bottom: 1px solid var(--b); padding: 10px 0; }}
+.audit-row:last-child {{ border: none; }}
+.audit-ts {{ color: var(--mute); font-size: 11px; font-variant-numeric: tabular-nums; }}
+.audit-kind {{ display: inline-block; padding: 1px 6px; border-radius: 2px; font-size: 10px;
+              text-transform: uppercase; letter-spacing: 0.06em; margin: 0 8px; }}
+.audit-approval {{ background: rgba(245,158,11,0.12); color: var(--amber); }}
+.audit-steering {{ background: rgba(34,211,238,0.12); color: var(--acc); }}
+.audit-command  {{ background: rgba(239,68,68,0.12); color: var(--red); }}
+.audit-request_update {{ background: rgba(167,139,250,0.12); color: #a78bfa; }}
+.audit-publish  {{ background: rgba(34,197,94,0.12); color: var(--green); }}
+.audit-by {{ color: var(--mute); font-size: 11px; }}
+.audit-list pre {{ background: #151515; padding: 8px; margin-top: 6px; font-size: 11px; }}
+</style>
+<div class="card">
+  <h2>audit log — chris interventions</h2>
+  <p class="muted" style="margin: 0 0 12px 0;">
+    Every approval, rejection, steering message, /cfg edit, /restart,
+    request decision, and autonomous blog publish. Public on purpose —
+    the point of this thing is to be honest about how much help it
+    needed.
+  </p>
+  {body_inner}
+</div>
+"""
+    return HTMLResponse(page("audit", body))
+
+
+@app.get("/api/audit.json")
+def audit_json():
+    root = paths_root()
+    return JSONResponse({"rows": _read_audit(root, 500)})
+
+
+# ---------------------------- /public ----------------------------------
+# Sanitised public stats page. No INBOX, no STATE/NEXT, no journal text,
+# no pending action bodies — only safe numbers + flavour. nginx exposes
+# this path without auth; everything else requires basic auth.
+
+def _public_stats() -> dict:
+    cfg = load_cfg()
+    root = paths_root()
+    state = root / "state"
+    logs = root / "logs"
+
+    try:
+        tick_n = int((state / "tick_counter.txt").read_text(encoding="utf-8").strip() or "0")
+    except OSError:
+        tick_n = 0
+
+    # journal line count (proxy for "things tried")
+    journal_lines = 0
+    journal_p = state / "JOURNAL.md"
+    if journal_p.exists():
+        journal_lines = sum(1 for L in journal_p.read_text(encoding="utf-8").splitlines() if L.strip())
+
+    # MTD spend — read from STATE.md if present, else 0
+    mtd_pence = 0
+    state_md_p = state / "STATE.md"
+    if state_md_p.exists():
+        import re
+        text = state_md_p.read_text(encoding="utf-8")
+        m = re.search(r"MTD\s+spend:?\s*£?\s*([\d.]+)", text, re.IGNORECASE)
+        if m:
+            try:
+                mtd_pence = int(float(m.group(1)) * 100)
+            except ValueError:
+                pass
+    ceiling_pence = int(cfg.get("tick", {}).get("budget_ceiling_pence_month", 10000))
+
+    # Token usage from metrics.csv
+    tokens_today_in = tokens_today_out = 0
+    tokens_total_in = tokens_total_out = 0
+    today_prefix = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    days_alive = 0
+    try:
+        m = logs / "metrics.csv"
+        if m.exists():
+            with m.open("r", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+            if rows:
+                first_ts = rows[0].get("ts", "")
+                if first_ts:
+                    started = datetime.fromisoformat(first_ts.replace("Z", "+00:00"))
+                    days_alive = max(0, (datetime.now(timezone.utc) - started).days)
+                for r in rows:
+                    in_t = int(r.get("input_tokens") or 0) if (r.get("input_tokens") or "").isdigit() else 0
+                    out_t = int(r.get("output_tokens") or 0) if (r.get("output_tokens") or "").isdigit() else 0
+                    tokens_total_in += in_t
+                    tokens_total_out += out_t
+                    if (r.get("ts") or "").startswith(today_prefix):
+                        tokens_today_in += in_t
+                        tokens_today_out += out_t
+    except Exception:
+        pass
+
+    metrics = _metric_stats(logs)
+    audit_rows = _read_audit(root, 1000)
+    interventions_today = sum(1 for r in audit_rows
+                              if (r.get("ts") or "").startswith(today_prefix))
+    interventions_total = len(audit_rows)
+
+    # blog drafts published (count files in published/)
+    blog_dir = state / "outbox" / "blog"
+    drafts_n = len(list((blog_dir / "drafts").glob("*.md"))) if (blog_dir / "drafts").exists() else 0
+    published_n = len(list((blog_dir / "published").glob("*.md"))) if (blog_dir / "published").exists() else 0
+
+    # Cost estimate — Ollama Cloud is on a flat plan so true £ cost
+    # doesn't scale per-token. Show tokens and let viewers decide.
+    return {
+        "tick_n": tick_n,
+        "journal_lines": journal_lines,
+        "days_alive": days_alive,
+        "mtd_pence": mtd_pence,
+        "mtd_ceiling_pence": ceiling_pence,
+        "wall_avg_s": metrics.get("wall_avg", 0),
+        "parse_pct": metrics.get("parse_pct", 0),
+        "drafts_n": drafts_n,
+        "published_n": published_n,
+        "last_tick_at": metrics.get("last_ts", ""),
+        "tokens_today_in": tokens_today_in,
+        "tokens_today_out": tokens_today_out,
+        "tokens_total_in": tokens_total_in,
+        "tokens_total_out": tokens_total_out,
+        "interventions_today": interventions_today,
+        "interventions_total": interventions_total,
+    }
+
+
+@app.get("/api/public.json")
+def public_json():
+    return JSONResponse(_public_stats())
+
+
+@app.get("/public", response_class=HTMLResponse)
+def public_page():
+    s = _public_stats()
+    mtd_pct = round(100 * s["mtd_pence"] / max(1, s["mtd_ceiling_pence"]), 1)
+    body = f"""<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mako · live</title>
+<style>{CSS}
+.hero {{ text-align: center; padding: 40px 16px; }}
+.hero h1 {{ font-size: 32px; letter-spacing: 0.04em; margin: 0 0 8px 0; color: #fff; }}
+.hero .sub {{ color: var(--mute); font-size: 13px; max-width: 580px; margin: 0 auto; line-height: 1.6; }}
+.hero .links {{ margin-top: 16px; }}
+.hero .links a {{ color: var(--acc); text-decoration: none; margin: 0 12px; font-size: 12px; }}
+.stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; max-width: 1100px; margin: 32px auto; padding: 0 16px; }}
+.stat {{ border: 1px solid var(--b); border-radius: 2px; padding: 16px 12px; text-align: center; background: #0e0e0e; }}
+.stat .num {{ font-size: 24px; color: #fff; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }}
+.stat .num-sm {{ font-size: 18px; }}
+.stat .label {{ font-size: 10px; color: var(--mute); text-transform: uppercase; letter-spacing: 0.1em; margin-top: 4px; }}
+.budget-bar {{ height: 4px; background: var(--b); border-radius: 2px; margin-top: 8px; overflow: hidden; }}
+.budget-fill {{ height: 100%; background: var(--green); width: {mtd_pct}%; transition: width 0.5s; }}
+.foot {{ text-align: center; color: var(--mute); padding: 24px; font-size: 11px; }}
+.foot a {{ color: var(--mute); }}
+.section-title {{ text-align: center; color: var(--mute); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; margin: 32px 0 4px 0; }}
+</style>
+</head><body>
+<div class="hero">
+  <h1>🦫 mako</h1>
+  <div class="sub">An AI agent trying to make £100/month online — building, journaling, and failing in public. Runs on a single VPS, ticks every few minutes, documents everything.</div>
+  <div class="links">
+    <a href="/audit">audit log</a>
+    <a href="/prompts">initial prompts</a>
+    <a href="https://github.com/minkforge/mako-zero">source</a>
+  </div>
+</div>
+<div class="section-title">activity</div>
+<div class="stats" hx-get="/api/public/stats-fragment" hx-trigger="every 30s" hx-swap="innerHTML">
+  <div class="stat"><div class="num">{s["tick_n"]:,}</div><div class="label">ticks</div></div>
+  <div class="stat"><div class="num">{s["days_alive"]}</div><div class="label">days alive</div></div>
+  <div class="stat"><div class="num">£{s["mtd_pence"]/100:.2f}</div><div class="label">spent · £{s["mtd_ceiling_pence"]/100:.0f} ceiling</div><div class="budget-bar"><div class="budget-fill"></div></div></div>
+  <div class="stat"><div class="num">{s["journal_lines"]:,}</div><div class="label">journal lines</div></div>
+  <div class="stat"><div class="num">{s["drafts_n"]}</div><div class="label">blog drafts</div></div>
+  <div class="stat"><div class="num">{s["published_n"]}</div><div class="label">published</div></div>
+  <div class="stat"><div class="num">{s["wall_avg_s"]}s</div><div class="label">avg tick wall</div></div>
+  <div class="stat"><div class="num">{s["parse_pct"]}%</div><div class="label">parse rate</div></div>
+</div>
+<div class="section-title">tokens consumed</div>
+<div class="stats">
+  <div class="stat"><div class="num-sm">{s["tokens_today_in"]:,}</div><div class="label">in · today</div></div>
+  <div class="stat"><div class="num-sm">{s["tokens_today_out"]:,}</div><div class="label">out · today</div></div>
+  <div class="stat"><div class="num-sm">{s["tokens_total_in"]:,}</div><div class="label">in · total</div></div>
+  <div class="stat"><div class="num-sm">{s["tokens_total_out"]:,}</div><div class="label">out · total</div></div>
+</div>
+<div class="section-title">chris interventions</div>
+<div class="stats">
+  <div class="stat"><div class="num-sm">{s["interventions_today"]:,}</div><div class="label">today</div></div>
+  <div class="stat"><div class="num-sm">{s["interventions_total"]:,}</div><div class="label">total</div></div>
+  <div class="stat"><div class="num-sm" style="font-size:14px;"><a href="/audit" style="color:var(--acc);text-decoration:none;">see all →</a></div><div class="label">full audit log</div></div>
+</div>
+<div class="foot">
+  last tick · {s["last_tick_at"] or "—"}<br>
+  source: <a href="https://github.com/minkforge/mako-zero">github.com/minkforge/mako-zero</a>
+</div>
+<script src="https://unpkg.com/htmx.org@1.9.10"></script>
+</body></html>"""
+    return HTMLResponse(body)
+
+
+@app.get("/api/public/stats-fragment", response_class=HTMLResponse)
+def public_stats_fragment():
+    s = _public_stats()
+    mtd_pct = round(100 * s["mtd_pence"] / max(1, s["mtd_ceiling_pence"]), 1)
+    return HTMLResponse(f"""
+  <div class="stat"><div class="num">{s["tick_n"]:,}</div><div class="label">ticks</div></div>
+  <div class="stat"><div class="num">{s["days_alive"]}</div><div class="label">days alive</div></div>
+  <div class="stat"><div class="num">£{s["mtd_pence"]/100:.2f}</div><div class="label">spent · £{s["mtd_ceiling_pence"]/100:.0f} ceiling</div><div class="budget-bar"><div class="budget-fill" style="width:{mtd_pct}%"></div></div></div>
+  <div class="stat"><div class="num">{s["journal_lines"]:,}</div><div class="label">journal lines</div></div>
+  <div class="stat"><div class="num">{s["drafts_n"]}</div><div class="label">blog drafts</div></div>
+  <div class="stat"><div class="num">{s["published_n"]}</div><div class="label">published</div></div>
+  <div class="stat"><div class="num">{s["wall_avg_s"]}s</div><div class="label">avg tick wall</div></div>
+  <div class="stat"><div class="num">{s["parse_pct"]}%</div><div class="label">parse rate</div></div>
+""")
+
+
+# ---------------------------- /prompts ---------------------------------
+# Public-readable rendered view of the engine prompts + mission, fetched
+# from GitHub raw so they're always current with what's actually
+# committed. Cached for 5 min to be polite.
+
+import urllib.request as _urlreq
+_prompts_cache: dict = {"ts": 0, "data": {}}
+GH_RAW = "https://raw.githubusercontent.com/minkforge/mako-zero/main"
+PROMPT_FILES = [
+    ("prompts/system.md",   "Worker system prompt"),
+    ("prompts/compact.md",  "Compaction tick prompt"),
+    ("prompts/scribe.md",   "Scribe (blog writer) prompt"),
+    ("prompts/meta.md",     "Meta loop prompt"),
+    ("seed/MISSION.md",     "Mission (current)"),
+    ("seed/CAPABILITIES.md","Capabilities (current)"),
+]
+
+
+def _fetch_prompt(path: str) -> str:
+    import time as _time
+    if _time.time() - _prompts_cache["ts"] < 300 and path in _prompts_cache["data"]:
+        return _prompts_cache["data"][path]
+    url = f"{GH_RAW}/{path}"
+    try:
+        with _urlreq.urlopen(url, timeout=10) as r:
+            text = r.read().decode("utf-8", "replace")
+    except Exception as e:
+        # fallback to local copy
+        local = paths_root() / path
+        if local.exists():
+            text = local.read_text(encoding="utf-8")
+        else:
+            text = f"(failed to fetch {url}: {e})"
+    _prompts_cache["data"][path] = text
+    _prompts_cache["ts"] = _time.time()
+    return text
+
+
+def _md_to_html_inline(md: str) -> str:
+    """Tiny markdown→HTML for inline rendering. Same minimal shim as
+    scribe.py — headings, paragraphs, lists, code fences."""
+    import re as _re
+    lines = md.split("\n")
+    out: list[str] = []
+    in_list = False
+    in_code = False
+    for raw in lines:
+        if raw.startswith("```"):
+            if in_code:
+                out.append("</code></pre>"); in_code = False
+            else:
+                if in_list: out.append("</ul>"); in_list = False
+                out.append("<pre><code>"); in_code = True
+            continue
+        if in_code:
+            out.append(_html_escape(raw))
+            continue
+        line = raw.rstrip()
+        if not line:
+            if in_list: out.append("</ul>"); in_list = False
+            out.append("")
+            continue
+        if line.startswith("# "):
+            if in_list: out.append("</ul>"); in_list = False
+            out.append(f"<h1>{_html_escape(line[2:])}</h1>")
+        elif line.startswith("## "):
+            if in_list: out.append("</ul>"); in_list = False
+            out.append(f"<h2>{_html_escape(line[3:])}</h2>")
+        elif line.startswith("### "):
+            if in_list: out.append("</ul>"); in_list = False
+            out.append(f"<h3>{_html_escape(line[4:])}</h3>")
+        elif line.lstrip().startswith("- "):
+            if not in_list:
+                out.append("<ul>"); in_list = True
+            out.append(f"<li>{_html_escape(line.lstrip()[2:])}</li>")
+        else:
+            if in_list: out.append("</ul>"); in_list = False
+            out.append(f"<p>{_html_escape(line)}</p>")
+    if in_list: out.append("</ul>")
+    if in_code: out.append("</code></pre>")
+    return "\n".join(out)
+
+
+def _html_escape(s: str) -> str:
+    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;").replace("'", "&#39;"))
+
+
+@app.get("/prompts", response_class=HTMLResponse)
+def prompts_page():
+    sections = []
+    for path, label in PROMPT_FILES:
+        text = _fetch_prompt(path)
+        rendered = _md_to_html_inline(text)
+        sections.append(f"""
+<details class="prompt-block" open>
+<summary><span class="prompt-label">{_html_escape(label)}</span>
+  <a class="prompt-link" href="{GH_RAW}/{path}">{path}</a></summary>
+<div class="prompt-body">{rendered}</div>
+</details>""")
+
+    body = f"""<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mako · prompts</title>
+<style>{CSS}
+.prompts-wrap {{ max-width: 920px; margin: 32px auto; padding: 0 16px; }}
+.prompt-block {{ border: 1px solid var(--b); border-radius: 2px; padding: 12px 16px; margin-bottom: 12px; background: #0e0e0e; }}
+.prompt-block summary {{ cursor: pointer; padding: 4px 0; outline: none; }}
+.prompt-label {{ color: #fff; font-weight: 600; letter-spacing: 0.04em; }}
+.prompt-link {{ color: var(--mute); margin-left: 12px; font-size: 11px; text-decoration: none; }}
+.prompt-link:hover {{ color: var(--acc); }}
+.prompt-body {{ margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--b); font-size: 13px; line-height: 1.6; }}
+.prompt-body h1 {{ font-size: 18px; color: #fff; }}
+.prompt-body h2 {{ font-size: 14px; color: #fff; margin-top: 24px; }}
+.prompt-body h3 {{ font-size: 12px; color: #fff; margin-top: 16px; letter-spacing: 0.04em; }}
+.prompt-body p {{ margin: 8px 0; }}
+.prompt-body code {{ background: #151515; padding: 1px 5px; border-radius: 2px; font-size: 12px; }}
+.prompt-body pre {{ background: #151515; padding: 10px; border-radius: 2px; overflow-x: auto; font-size: 11px; }}
+.prompt-body pre code {{ padding: 0; background: none; }}
+.prompt-body ul {{ padding-left: 22px; }}
+</style>
+</head><body>
+<header>
+  <div class="brand">🦫 Mako · prompts</div>
+  <nav><a href="/public">stats</a><a href="/audit">audit</a><a href="https://github.com/minkforge/mako-zero">source</a></nav>
+</header>
+<main class="prompts-wrap">
+  <p class="muted">These are the prompts that drive Mako, fetched live from the GitHub repo (5-min cache). Edit on GitHub → the dashboard updates automatically. The meta loop occasionally proposes patches to these via Codex; every change shows up in <code>git log</code> with a <code>meta:</code> prefix.</p>
+  {''.join(sections)}
+</main>
+</body></html>"""
+    return HTMLResponse(body)
+
+
 # ---------------------------- /public ----------------------------------
 # Sanitised public stats page. No INBOX, no STATE/NEXT, no journal text,
 # no pending action bodies — only safe numbers + flavour. nginx exposes

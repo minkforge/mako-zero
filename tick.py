@@ -197,7 +197,22 @@ def assemble_hot_context(cfg: dict, paths: Paths, requested_notes: list[str],
         parts.append((label, content))
         sizes[label] = est_tokens(content)
 
+    # TIME — first thing Mako sees so he never miscounts.
+    now_utc = datetime.now(timezone.utc)
+    days_alive, ticks_alive, first_tick_iso = compute_alive_stats(paths)
     av = compute_availability(cfg)
+    try:
+        from zoneinfo import ZoneInfo
+        local = now_utc.astimezone(ZoneInfo(av.get("tz", "Europe/London")))
+        local_str = local.strftime("%Y-%m-%d %H:%M %Z")
+    except Exception:
+        local_str = now_utc.isoformat(timespec="minutes")
+    add("TIME",
+        f"now_utc: {now_utc.isoformat(timespec='seconds')}\n"
+        f"now_local: {local_str}\n"
+        f"days_alive: {days_alive}\n"
+        f"ticks_alive: {ticks_alive}\n"
+        f"first_tick_at: {first_tick_iso or '(this is your first tick)'}")
     add("AVAILABILITY (Chris's working window)",
         f"in_window: {av['in_window']}\n"
         f"sla_min: {av['sla_min']}\n"
@@ -210,10 +225,21 @@ def assemble_hot_context(cfg: dict, paths: Paths, requested_notes: list[str],
     add("CAPABILITIES.md", read_text(paths.state / "CAPABILITIES.md"))
     add("STATE.md", read_text(paths.state / "STATE.md"))
     add("NEXT.md", read_text(paths.state / "NEXT.md"))
+    # OPEN REQUESTS — Mako sees what he's already asked Chris for, so he
+    # doesn't re-emit duplicates and doesn't keep mentioning blockers.
+    add("OPEN REQUESTS (don't re-emit duplicates; park if blocked, work on something else)",
+        summarise_open_requests(paths))
+    # BLOCKED — count only; details parked in notes/blocked.md (NOT loaded
+    # every tick to stop Mako looping on stuck items).
+    add("BLOCKED (parked items — don't keep checking; resume when Chris signals an unblock)",
+        summarise_blocked(paths))
+    # BACKLOG — count + top 3 only. Full list in notes/backlog.md.
+    add("BACKLOG (your idea pipeline — see notes/backlog.md for the full list)",
+        summarise_backlog(paths))
     add("JOURNAL.md (last %d lines)" % cfg["context"]["recent_journal_lines"],
         tail_lines(paths.state / "JOURNAL.md", cfg["context"]["recent_journal_lines"]))
     add("notes/INDEX.md", read_text(paths.notes / "INDEX.md"))
-    add("outbox/blog/drafts/ (scribe's drafts — read full text via read_file before publishing)",
+    add("outbox/blog/drafts/ (scribe's drafts; published autonomously by scribe, max 2/day)",
         list_drafts(paths))
     add("LAST_RESULTS.md", read_text(paths.state / "LAST_RESULTS.md"))
     add("PERSONA.md", read_text(paths.state / "PERSONA.md"))
@@ -234,6 +260,79 @@ def assemble_hot_context(cfg: dict, paths: Paths, requested_notes: list[str],
     sizes["_total_tokens_est"] = est_tokens(text)
     sizes["_loaded_notes"] = loaded_notes
     return text, sizes
+
+
+def compute_alive_stats(paths: Paths) -> tuple[int, int, str]:
+    """Returns (days_alive, ticks_alive, first_tick_iso). Reads the first
+    metrics row to discover when this Mako instance was born; if metrics is
+    empty, returns (0, 0, '') — first tick. Reset wipes metrics, so this
+    naturally re-zeros on a fresh start."""
+    metrics = paths.logs / "metrics.csv"
+    if not metrics.exists():
+        return 0, 0, ""
+    try:
+        with metrics.open("r", encoding="utf-8") as f:
+            first_line = f.readline()  # header
+            second = f.readline()       # first data row
+            if not second:
+                return 0, 0, ""
+            first_ts = second.split(",", 1)[0]
+            born = datetime.fromisoformat(first_ts.replace("Z", "+00:00"))
+            now = datetime.now(timezone.utc)
+            days = max(0, (now - born).days)
+            # ticks = lines in file minus header
+            f.seek(0)
+            n = sum(1 for _ in f) - 1
+            return days, max(0, n), first_ts
+    except Exception:
+        return 0, 0, ""
+
+
+def summarise_open_requests(paths: Paths) -> str:
+    """Summarise pending/resources.jsonl + open ask_chris questions for hot context."""
+    p = paths.pending / "resources.jsonl"
+    if not p.exists():
+        return "(no open resource requests)"
+    try:
+        rows = [json.loads(L) for L in p.read_text(encoding="utf-8").splitlines() if L.strip()]
+    except Exception:
+        return "(resources.jsonl unreadable)"
+    open_rows = [r for r in rows if r.get("status") in (None, "open", "pending")]
+    if not open_rows:
+        return "(no open resource requests)"
+    lines = [f"{len(open_rows)} open — don't re-emit. Wait for Chris's reply via INBOX:"]
+    for r in open_rows[-10:]:
+        rid = r.get("id", "?")
+        ask = (r.get("action") or {}).get("ask", "?")[:80]
+        cat = (r.get("action") or {}).get("category", "?")
+        queued = r.get("queued_at", "?")[:19]
+        lines.append(f"- {rid} · {cat} · {ask} (queued {queued})")
+    return "\n".join(lines)
+
+
+def summarise_blocked(paths: Paths) -> str:
+    """Count-only summary of notes/blocked.md. Full text NOT in hot context."""
+    p = paths.notes / "blocked.md"
+    if not p.exists():
+        return "(none parked)"
+    lines = [L for L in p.read_text(encoding="utf-8").splitlines() if L.strip().startswith("- ")]
+    if not lines:
+        return "(none parked)"
+    return (f"{len(lines)} item(s) parked in notes/blocked.md. "
+            f"Don't bring them up unless something has changed. "
+            f"If you want to unpark something, write_file blocked.md to remove it.")
+
+
+def summarise_backlog(paths: Paths) -> str:
+    """Count + top 3 from notes/backlog.md."""
+    p = paths.notes / "backlog.md"
+    if not p.exists():
+        return "(empty — see backlog mode in your prompt)"
+    lines = [L for L in p.read_text(encoding="utf-8").splitlines() if L.strip().startswith("- ")]
+    if not lines:
+        return "(empty — see backlog mode in your prompt)"
+    head = lines[:3]
+    return f"{len(lines)} item(s). Top 3:\n" + "\n".join(head)
 
 
 def read_pending_note_requests(paths: Paths) -> list[str]:
@@ -795,6 +894,45 @@ def queue_gated_action(cfg: dict, paths: Paths, action: dict) -> dict:
             "silent_ping": silent}
 
 
+def queue_resource_request(cfg: dict, paths: Paths, action: dict) -> dict:
+    """request_resource is a multi-turn conversation with Chris on the
+    Requests thread. Persists to pending/resources.jsonl so Mako sees it
+    as an open request in hot context next tick."""
+    rid = f"r{int(time.time()*1000)}"
+    rec = {"id": rid, "queued_at": now_iso(), "status": "open", "action": action}
+    append_text(paths.pending / "resources.jsonl", json.dumps(rec) + "\n")
+    av = compute_availability(cfg)
+    suppress = bool((cfg.get("availability") or {}).get(
+        "suppress_approval_pings_out_of_window", True))
+    silent = (not av["in_window"]) and suppress
+    cat = action.get("category", "other")
+    ask = str(action.get("ask", "(no ask)"))[:120]
+    rationale = str(action.get("rationale", ""))[:300]
+    business_case = str(action.get("business_case", ""))[:500]
+    alts = str(action.get("alternatives_tried", ""))[:200]
+    summary = (
+        f"📨 {rid} · REQUEST · {cat}\n"
+        f"ask: {ask}\n"
+        f"rationale: {rationale}\n"
+        + (f"business case: {business_case}\n" if business_case else "")
+        + (f"alternatives tried: {alts}\n" if alts else "")
+        + f"reply on this thread to discuss / approve / reject"
+    )
+    if silent:
+        summary = "🌙 (out-of-hours · silent ping)\n" + summary
+    try:
+        # Resource requests go to the Requests thread (not Approvals — they
+        # need discussion, not a yes/no).
+        thread = (cfg["telegram"].get("requests_thread_id")
+                  or cfg["telegram"].get("approvals_thread_id")
+                  or cfg["telegram"].get("log_thread_id"))
+        telegram_send(cfg, summary, thread_id=thread, label="request", silent=silent)
+    except Exception:
+        pass
+    return {"ok": True, "queued": True, "id": rid, "type": "request_resource",
+            "category": cat, "silent_ping": silent}
+
+
 # ----------------- non-gated dispatcher --------------------------------
 
 NON_GATED = {"shell", "http_get", "write_file", "read_file", "git",
@@ -805,6 +943,9 @@ GATED = {"email_send", "cf_api", "http_post", "http_put", "http_delete", "spend"
 def dispatch_action(cfg: dict, paths: Paths, action: dict) -> dict:
     t = str(action.get("type", "")).strip()
     needs_approval = bool(action.get("needs_approval", False))
+    # Resource requests are their own queue + Telegram thread.
+    if t == "request_resource":
+        return queue_resource_request(cfg, paths, action)
     if needs_approval or t in GATED:
         return queue_gated_action(cfg, paths, action)
     if t == "shell":
@@ -903,8 +1044,9 @@ def telegram_send(cfg: dict, text: str, thread_id: int | None = None, label: str
 
 METRIC_FIELDS = [
     "ts", "tick_n", "mode", "wall_s", "provider_used", "model_used",
-    "input_tokens_est", "output_chars", "actions_count",
-    "actions_executed", "actions_queued",
+    "input_tokens_est", "input_tokens", "output_tokens", "output_chars",
+    "progress_confidence",
+    "actions_count", "actions_executed", "actions_queued",
     "parse_ok", "drift_flag", "compact_now", "failures",
 ]
 
@@ -1140,12 +1282,19 @@ def main() -> int:
             write_full_log(paths, "ticks", tick_n, full_log)
         return 1
 
+    # Real token counts from the provider response, if available.
+    in_tok = meta.get("prompt_eval_count") or (meta.get("usage") or {}).get("prompt_tokens") or ""
+    out_tok = meta.get("eval_count") or (meta.get("usage") or {}).get("completion_tokens") or ""
+    confidence = obj.get("progress_confidence", "") if isinstance(obj, dict) else ""
+
     record_metric(paths, {
         "ts": now_iso(), "tick_n": tick_n, "mode": args.mode,
         "wall_s": round(time.time() - t_start, 2),
         "provider_used": meta.get("slot", ""), "model_used": meta.get("model", ""),
         "input_tokens_est": sizes.get("_total_tokens_est", ""),
+        "input_tokens": in_tok, "output_tokens": out_tok,
         "output_chars": output_chars,
+        "progress_confidence": confidence,
         "actions_count": len((obj.get("actions") or [])),
         "actions_executed": actions_executed,
         "actions_queued": actions_queued,

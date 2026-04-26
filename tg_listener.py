@@ -113,6 +113,48 @@ def _append_inbox(paths_root: Path, entry: str) -> None:
         f.write(entry)
 
 
+def _audit(paths_root: Path, entry: dict) -> None:
+    """Append a JSONL audit row. Used for: command invocations, resource
+    request updates, approvals, rejections. Never includes secrets — the
+    callers are responsible for redaction."""
+    import time as _time, json as _json
+    entry.setdefault("ts", datetime.now().isoformat(timespec="seconds"))
+    p = paths_root / "logs" / "audit.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as f:
+        f.write(_json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def _resource_update(paths_root: Path, rid: str, status: str, reply_text: str) -> None:
+    """Update pending/resources.jsonl: rewrite the matching record's status
+    and append a discussion turn."""
+    p = paths_root / "pending" / "resources.jsonl"
+    if not p.exists():
+        return
+    out_lines: list[str] = []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            out_lines.append(line)
+            continue
+        if rec.get("id") == rid:
+            if status in ("granted", "rejected"):
+                rec["status"] = status
+            else:
+                # Keep status open; record the discussion turn.
+                rec.setdefault("discussion", []).append({
+                    "ts": datetime.now().isoformat(timespec="seconds"),
+                    "by": "chris", "text": reply_text[:1000],
+                })
+            out_lines.append(json.dumps(rec, ensure_ascii=False))
+        else:
+            out_lines.append(line)
+    p.write_text("\n".join(out_lines) + ("\n" if out_lines else ""), encoding="utf-8")
+
+
 def _result_summary(action_type: str, result: dict) -> str:
     if not result.get("ok"):
         return f"failed: {result.get('error') or result.get('body','?')[:200]}"
@@ -154,6 +196,12 @@ def _handle_approval(cfg: dict, paths_root: Path, qid: str, intent: str,
         }
         _append_decision(paths_root, decision)
         _write_pending(paths_root, kept)
+        try:
+            _audit(paths_root, {"kind": "approval", "decision": "approve",
+                                "by": "telegram", "qid": qid, "type": a_type,
+                                "ok": bool(result.get("ok"))})
+        except Exception:
+            pass
 
         ok_marker = "✅" if result.get("ok") else "❌"
         tg = (f"{ok_marker} {qid} · {a_type}\n"
@@ -175,6 +223,12 @@ def _handle_approval(cfg: dict, paths_root: Path, qid: str, intent: str,
         }
         _append_decision(paths_root, decision)
         _write_pending(paths_root, kept)
+        try:
+            _audit(paths_root, {"kind": "approval", "decision": "reject",
+                                "by": "telegram", "qid": qid, "type": a_type,
+                                "reason": reason[:200]})
+        except Exception:
+            pass
 
         msg = f"❎ {qid} · {a_type} · rejected"
         if reason:
@@ -266,11 +320,64 @@ def telegram_poller(cfg: dict, paths_root: Path, shutdown: threading.Event,
                         except Exception as e:
                             log(f"[tg-listener] reply send failed: {e!r}")
                         log(f"[tg-listener] /cmd: {text[:60]} → {reply[:80]!r}")
+                        # AUDIT — every command that produces a reply.
+                        try:
+                            _audit(paths_root, {
+                                "kind": "command", "by": "telegram",
+                                "thread": thread_id, "cmd": text[:300],
+                                "reply": reply[:400],
+                            })
+                        except Exception:
+                            pass
                         continue
                     # Unrecognised /cmd — fall through and let it land in INBOX
 
                 rt = msg.get("reply_to_message") or {}
                 rt_text = (rt.get("text") or "")
+
+                # Resource-request reply detection: if Chris is replying to a
+                # `📨 R… · REQUEST · …` message, route it as a resource update
+                # — captured to INBOX with the rid context AND audited.
+                if rt_text and ("REQUEST" in rt_text and "📨" in rt_text):
+                    rid_match = re.search(r"\b(r\d{8,})\b", rt_text)
+                    if rid_match:
+                        rid = rid_match.group(1)
+                        intent_text = text.lower().strip()
+                        granted = any(k in intent_text for k in
+                                      ("approved", "approve", "granted", "yes",
+                                       "do it", "go ahead", "ok", "👍"))
+                        rejected = any(k in intent_text for k in
+                                       ("rejected", "reject", "denied", "no",
+                                        "👎", "don't", "do not"))
+                        status = "granted" if granted else ("rejected" if rejected else "discussion")
+                        try:
+                            _resource_update(paths_root, rid, status, text)
+                        except Exception as e:
+                            log(f"[tg-listener] resource update failed: {e!r}")
+                        marker = ("✅ granted" if status == "granted"
+                                  else "❎ rejected" if status == "rejected"
+                                  else "💬 discussion")
+                        _append_inbox(paths_root, (
+                            f"\n[request · {rid}] {marker}\n"
+                            f"chris said: {text}\n"
+                        ))
+                        try:
+                            import tick as t_mod
+                            t_mod.telegram_send(cfg, f"{marker} · {rid} captured",
+                                                thread_id=thread_id_raw or None,
+                                                label="request-update")
+                        except Exception:
+                            pass
+                        try:
+                            _audit(paths_root, {
+                                "kind": "request_update", "by": "telegram",
+                                "rid": rid, "status": status,
+                                "text": text[:400],
+                            })
+                        except Exception:
+                            pass
+                        wrote_any = True
+                        continue
 
                 # Approval-flow short-circuit: if this is a reply to a
                 # NEEDS APPROVAL ping, parse qID and intent.
@@ -299,6 +406,12 @@ def telegram_poller(cfg: dict, paths_root: Path, shutdown: threading.Event,
                     f.write(entry)
                 wrote_any = True
                 log(f"[tg-listener] inbox += {len(text)} chars from thread {thread_id}")
+                try:
+                    _audit(paths_root, {"kind": "steering", "by": "telegram",
+                                        "thread": str(thread_id),
+                                        "text": text[:500]})
+                except Exception:
+                    pass
 
             # Persist the offset even on empty long-poll cycles so we don't
             # re-poll the same window on restart.
