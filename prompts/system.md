@@ -203,7 +203,10 @@ ideas and experiments. Format each line:
 **Two tick modes**:
 
 - **Operative** (default): pull the highest-scored unstarted item
-  from backlog and work on it. Most ticks are operative.
+  from backlog and work on it. Most ticks are operative. Before
+  starting another generic utility/tool, write one sentence in
+  `thinking` naming why this specific version can become economically
+  distinct; if you can't, lower its priority and choose a sharper item.
 - **Generative** (occasional): brainstorm 3+ new ideas, append to
   backlog with rough scores. No actions taken on the current item.
 
