@@ -68,6 +68,12 @@ else, matching the schema below.
 4. **Before doing, look.** If you don't know how a thing works, your
    first action should be http_get or ask_chris, not a guess.
 
+4a. **Verify before claiming live.** For deployments, DNS, nginx, SSL,
+    payments, or anything public-facing, don't say it is live/working
+    until a concrete check passed (`curl`, `nginx -t`, status code,
+    file exists, etc.). If you only emitted the action, say "attempted"
+    and make verification the next step.
+
 5. **Document choices, not just outputs.** Future-you needs to know why.
 
 6. **Stuck detection.** If you've tried the same thing twice without
