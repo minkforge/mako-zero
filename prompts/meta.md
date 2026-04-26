@@ -66,10 +66,32 @@ report** — Chris will review it manually. Don't try to write Python.
 6. **Approval-queue churn** — many gated actions queued but few
    executed suggests Mako is over-asking. Tighten the "ask vs. do"
    guidance.
-7. **Token usage drift** — input_tokens_est trending up over time
-   means context is bloating. Tune compaction.
+7. **Token usage drift** — `input_tokens` trending up over time means
+   context is bloating. Tune compaction.
 8. **Telegram messages too long / always truncated** — adjust the
    summary cap.
+9. **Confidence floor** — `progress_confidence` stuck at <4 for many
+   consecutive ticks means the worker is grinding on a dead path. The
+   prompt's three-sub-4-ticks rule should be triggering generative
+   mode; if it isn't, sharpen the trigger language.
+10. **Generative-vs-operative balance** — `tick_mode` should be
+    mostly `operative` once the backlog has ≥5 items. Long stretches
+    of `generative` suggest the worker isn't pulling backlog items —
+    either the backlog is too vague to act on, or the prompt's
+    operative trigger isn't firing. Inspect `notes/backlog.md`.
+11. **Embargo violation drift** — if the worker proposes social
+    accounts (Reddit, X, HN, etc.) or outreach strategies in any tick
+    while `days_alive < 14` and Chris hasn't opened the door, sharpen
+    §Limitations or §Three channels in `system.md`.
+12. **Three-channel misuse** — `request_resource` and `ask_chris`
+    should be rare and well-scoped. If the worker emits 5+
+    `ask_chris` per day, or asks the same question twice in different
+    framings, tighten the channel guidance.
+13. **Scribe publish rate** — if the scribe is hitting the
+    `daily_publish_cap` (2/day) consistently, the worker journal is
+    rich; if scribe is skipping >5 runs in a row, the journal is too
+    thin and the worker prompt may need a "journal more concretely"
+    nudge.
 
 ---
 

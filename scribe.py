@@ -296,7 +296,7 @@ def main() -> int:
                 raise RuntimeError("scribe returned draft with empty body_md")
             out_path = write_draft(paths, slug, title, body_md)
             full_log["draft_path"] = str(out_path.relative_to(paths.root))
-            summary = (draft.get("summary_for_chris") or title)[:300]
+            summary = (draft.get("summary") or draft.get("summary_for_chris") or title)[:300]
 
             # Auto-publish — Chris asked for autonomy here. Hard-cap at
             # `scribe.daily_publish_cap` (default 2) per UTC day.
