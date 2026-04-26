@@ -715,8 +715,51 @@ def exec_git(cfg: dict, paths: Paths, action: dict) -> dict:
     return exec_shell(cfg, paths, {"cmd": full})
 
 
+_THREAD_ALIASES = {
+    "log": "log_thread_id",
+    "requests": "requests_thread_id",
+    "request": "requests_thread_id",
+    "approvals": "approvals_thread_id",
+    "approval": "approvals_thread_id",
+    "digest": "digest_thread_id",
+    "digests": "digest_thread_id",
+    "revenue": "revenue_thread_id",
+}
+_GENERAL_ALIASES = {"general", "main", "chat"}
+
+
+def _resolve_thread(cfg: dict, thread) -> int | None:
+    """Resolve a thread reference to a numeric Telegram thread ID.
+
+    Accepts:
+      - None / ""              → log thread (default)
+      - int or numeric str     → returned as int
+      - "log" / "requests" /
+        "approvals" /
+        "digest" / "revenue"
+        (and singular/plural
+         aliases)              → looked up in cfg["telegram"]
+      - "general" / "main" /
+        "chat"                 → None (posts to the general group chat)
+      - unknown name           → falls back to log thread
+    """
+    if thread is None or thread == "":
+        return cfg["telegram"].get("log_thread_id")
+    try:
+        return int(thread)
+    except (TypeError, ValueError):
+        pass
+    name = str(thread).strip().lower()
+    if name in _GENERAL_ALIASES:
+        return None
+    key = _THREAD_ALIASES.get(name)
+    if key is None:
+        return cfg["telegram"].get("log_thread_id")
+    return cfg["telegram"].get(key) or cfg["telegram"].get("log_thread_id")
+
+
 def exec_telegram_post(cfg: dict, action: dict) -> dict:
-    thread = action.get("thread", cfg["telegram"]["log_thread_id"])
+    thread = _resolve_thread(cfg, action.get("thread"))
     text = str(action.get("text", ""))
     return telegram_send(cfg, text, thread_id=thread, label="action")
 

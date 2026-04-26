@@ -81,11 +81,19 @@ def assemble_scribe_context(cfg: dict, paths: t.Paths) -> tuple[str, dict]:
     return text, sizes
 
 
-def approval_thread_id(cfg: dict) -> int | None:
-    name = cfg.get("scribe", {}).get("approval_thread", "approvals")
+def publish_announce_thread_id(cfg: dict) -> int | None:
+    """Where the autonomous-publish heads-up post goes.
+
+    Defaults to log (publishes are autonomous — no approval needed).
+    Honours legacy `scribe.approval_thread` config key for back-compat
+    (= "approvals" | "requests" | "log") and the new
+    `scribe.publish_announce_thread` key (same values).
+    """
+    sc = cfg.get("scribe", {})
+    name = sc.get("publish_announce_thread") or sc.get("approval_thread") or "log"
     tg = cfg["telegram"]
     if name == "approvals":
-        return tg.get("approvals_thread_id") or tg.get("requests_thread_id") or tg.get("log_thread_id")
+        return tg.get("approvals_thread_id") or tg.get("log_thread_id")
     if name == "requests":
         return tg.get("requests_thread_id") or tg.get("log_thread_id")
     return tg.get("log_thread_id")
@@ -332,8 +340,8 @@ def main() -> int:
                         }, ensure_ascii=False) + "\n")
                 except Exception:
                     pass
-            res = t.telegram_send(cfg, text, thread_id=approval_thread_id(cfg), label="scribe-publish")
-            full_log["telegram_posts"].append({"text": text, "thread_id": approval_thread_id(cfg), "result": res})
+            res = t.telegram_send(cfg, text, thread_id=publish_announce_thread_id(cfg), label="scribe-publish")
+            full_log["telegram_posts"].append({"text": text, "thread_id": publish_announce_thread_id(cfg), "result": res})
 
         elif kind == "skip":
             reason = (obj.get("skip") or {}).get("reason", "no arc yet") if isinstance(obj.get("skip"), dict) else (obj.get("skip") or "no arc yet")

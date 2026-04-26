@@ -98,7 +98,7 @@ scribe:
   enabled: true
   recent_journal_lines: 100    # full picture, not just last 20
   max_drafts_per_run: 1        # avoid flooding the outbox
-  approval_thread: approvals   # approvals | requests | log
+  publish_announce_thread: log # approvals | requests | log — where the autopublish heads-up goes (publishes are autonomous; no approval)
   daily_publish_cap: 2         # max blog posts auto-published per UTC day
   publish_dir: /var/www/html/blog  # nginx-served path for the static site
 

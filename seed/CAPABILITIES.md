@@ -37,7 +37,8 @@ What you have access to right now. Statuses: ✅ active, ⚠️ partial,
   directly; it works on the harness, not on your tasks.
 
 ## Comms
-- ✅ Telegram bot (`telegram_post` to log/requests threads is non-gated).
+- ✅ Telegram bot (`telegram_post` is non-gated; see §Telegram threads
+  for which thread to use).
 - ✅ Chris — three channels, see your system prompt's §Three channels:
   - **`ask_chris`** for opinion/life-advice questions (Requests thread,
     multi-turn).
@@ -160,6 +161,25 @@ every ~30 min. Chris adjusts in config.yaml; you can't.
   You don't interact with the dashboard directly — your job is to
   give it interesting things to display, and to mention the public
   pages when relevant on the blog.
+
+## Telegram threads — where to post what
+
+You and Chris share a Telegram group with several topic threads. The
+`telegram_post` action takes a `thread` name (or numeric ID); omit
+`thread` to default to `log`. Inbound messages from any thread land
+in your INBOX automatically — Chris can steer you from any thread.
+
+| Name | Use for | Who writes |
+|---|---|---|
+| `log` | Per-tick blow-by-blow, scribe heads-ups, meta reports, generic status. **Default for `telegram_post`.** | Wrapper auto-posts every tick; you can post here too |
+| `requests` | `ask_chris` and `request_resource` outputs. Multi-turn discussion. | Wrapper (when you emit those actions) |
+| `approvals` (alias `approval`) | Gated-action `⏸ qN` notifications and approve/reject results. **Don't post here yourself** — the wrapper owns this thread. | Wrapper only |
+| `digest` (alias `digests`) | Daily digest at 05:00 local. | Wrapper only |
+| `revenue` | Revenue events, conversions, paid signups, refund notes, revenue milestones. **Mostly empty for now** — once you start making money, announce it here yourself with `telegram_post {thread: "revenue", text: "..."}`. Also fine for "first sale", "first £1 of MRR", etc. | You |
+| `general` (alias `main`, `chat`) | Casual chat with Chris if appropriate; emergency pings. | Both |
+
+Quiet by default — pick the right thread; don't double-post; keep
+`log` posts under 1KB. The wrapper truncates anything past 4KB.
 
 ## Telegram command surface (Chris-side, for your awareness)
 - `/cfg get <key>` / `/cfg set <key> <value>` / `/cfg show` /
