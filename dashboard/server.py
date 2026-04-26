@@ -30,22 +30,44 @@ from zoneinfo import ZoneInfo
 
 LONDON = ZoneInfo("Europe/London")
 
-# Mako portrait — pixel-art mink with shades. Lazy-loaded once, cached
-# as a data URI so we can inline it in every HTML response without
-# adding an extra round-trip or needing a public nginx /static/ rule.
+# Mako portrait + favicon — pixel-art mink with shades. Lazy-loaded once,
+# cached as data URIs so we can inline them in every HTML response
+# without adding extra round-trips or needing a public nginx /static/ rule.
 _MAKO_IMG_PATH = Path(__file__).parent / "static" / "mako.png"
+_MAKO_FAV_PATH = Path(__file__).parent / "static" / "mako-favicon.png"
 _MAKO_IMG_URI: str | None = None
+_MAKO_FAV_URI: str | None = None
+
+
+def _data_uri(path: Path) -> str:
+    try:
+        return "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode("ascii")
+    except OSError:
+        return ""
 
 
 def mako_img_uri() -> str:
     global _MAKO_IMG_URI
     if _MAKO_IMG_URI is None:
-        try:
-            data = _MAKO_IMG_PATH.read_bytes()
-            _MAKO_IMG_URI = "data:image/png;base64," + base64.b64encode(data).decode("ascii")
-        except OSError:
-            _MAKO_IMG_URI = ""  # cached miss; degrade gracefully to text-only brand
+        _MAKO_IMG_URI = _data_uri(_MAKO_IMG_PATH)
     return _MAKO_IMG_URI
+
+
+def mako_favicon_uri() -> str:
+    global _MAKO_FAV_URI
+    if _MAKO_FAV_URI is None:
+        # Fall back to the larger portrait if the dedicated favicon is missing
+        _MAKO_FAV_URI = _data_uri(_MAKO_FAV_PATH) or mako_img_uri()
+    return _MAKO_FAV_URI
+
+
+def favicon_link() -> str:
+    """The <link rel="icon"> tag, ready to drop into <head>. Empty string
+    if the favicon couldn't be loaded — browsers handle that gracefully."""
+    uri = mako_favicon_uri()
+    if not uri:
+        return ""
+    return f'<link rel="icon" type="image/png" href="{uri}">'
 
 
 def _fmt_london(ts: str) -> str:
@@ -177,6 +199,7 @@ def page(active: str, body: str, title: str = "Mako", public: bool = False) -> s
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title}</title>
+{favicon_link()}
 <style>{CSS}
 .brand-img {{ width: 22px; height: 22px; image-rendering: pixelated; vertical-align: middle; margin-right: 6px; border-radius: 2px; }}
 </style>
@@ -851,6 +874,7 @@ def public_page():
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Mako · live</title>
+{favicon_link()}
 <style>{CSS}
 .hero {{ text-align: center; padding: 40px 16px; }}
 .hero-img {{ width: 144px; height: 144px; image-rendering: pixelated; border-radius: 4px; margin: 0 auto 16px; display: block; }}
@@ -1035,6 +1059,7 @@ def prompts_page():
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Mako · prompts</title>
+{favicon_link()}
 <style>{CSS}
 .prompts-wrap {{ max-width: 920px; margin: 32px auto; padding: 0 16px; }}
 .prompt-block {{ border: 1px solid var(--b); border-radius: 2px; padding: 12px 16px; margin-bottom: 12px; background: #0e0e0e; }}
