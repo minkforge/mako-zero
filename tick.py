@@ -724,6 +724,7 @@ _THREAD_ALIASES = {
     "digest": "digest_thread_id",
     "digests": "digest_thread_id",
     "revenue": "revenue_thread_id",
+    "meta": "meta_thread_id",
 }
 _GENERAL_ALIASES = {"general", "main", "chat"}
 

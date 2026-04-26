@@ -22,6 +22,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -124,6 +125,35 @@ def recent_errors(logs: Path, n: int = 5) -> str:
     return "\n".join(out)
 
 
+def consume_meta_inbox(state: Path, archive: Path) -> str:
+    """Read state/META_INBOX.md if present; archive + clear it.
+
+    Returns the inbox text (or empty string). Archived to
+    archive/meta-inbox-<UTC-timestamp>.md so Chris can review later.
+    """
+    p = state / "META_INBOX.md"
+    if not p.exists():
+        return ""
+    try:
+        text = p.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+    if not text:
+        return ""
+    # Archive then clear
+    try:
+        archive.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+        (archive / f"meta-inbox-{ts}.md").write_text(text, encoding="utf-8")
+    except Exception:
+        pass
+    try:
+        p.write_text("", encoding="utf-8")
+    except Exception:
+        pass
+    return text
+
+
 def build_context(cfg: dict, paths: t_mod.Paths, meta_n: int) -> str:
     state = paths.state
     logs = paths.logs
@@ -132,6 +162,13 @@ def build_context(cfg: dict, paths: t_mod.Paths, meta_n: int) -> str:
 
     parts.append(("intro", f"Meta tick #{meta_n} at {now_iso()}.\n"
                             f"Mako worker tick counter: {tail_lines(state/'tick_counter.txt', 1)}"))
+
+    # Steering from Chris — highest priority, consume + archive
+    inbox_text = consume_meta_inbox(state, paths.archive)
+    if inbox_text:
+        parts.append(("⚡ META INBOX FROM CHRIS — address this before doing anything else",
+                      inbox_text))
+
     parts.append(("metrics", metrics_summary(logs, n=50)))
     parts.append(("recent journal (last 30)", tail_lines(state / "JOURNAL.md", 30)))
     parts.append(("recent errors", recent_errors(logs, n=5)))
@@ -239,18 +276,89 @@ def git_status_and_log(repo: Path) -> dict:
     return out
 
 
-def git_commit_meta_changes(repo: Path, meta_n: int, codex_summary: str = "") -> dict:
-    """Codex's sandbox mounts .git read-only on this host, so it can't
-    commit. We do the commit on its behalf — but only for files inside
-    the meta whitelist (prompts/* and config.yaml, plus state/META_REPORTS.md).
-    Anything else dirty after a meta run is a bug; we leave it untouched
-    and surface it.
+# Files / dirs meta must NEVER auto-commit, even if Codex stages them.
+# .gitignore already excludes most of these — this is belt-and-braces.
+_DENY_PATHS = (
+    "config.yaml",            # local secrets — gitignored, don't override
+    ".env",                    # gitignored
+    ".dash.htpasswd",          # dashboard auth
+    "state/", "notes/",        # Mako's working memory (gitignored)
+    "workdir/", "archive/",
+    "pending/", "logs/",
+    "__pycache__/",
+    "OVERNIGHT-",              # local handover notes (gitignored anyway)
+)
+_DENY_SUFFIXES = (".pem", ".crt", ".key", ".htpasswd")
+
+# Secret-shaped patterns that should never appear in a diff being pushed.
+# Conservative: catches "<keyword>: <non-empty>" and AWS/GCP key prefixes.
+_SECRET_LINE_PATTERNS = (
+    re.compile(r"^\+.*\b(api_key|bot_token|smtp_password|password|secret|access_token)\b\s*:\s*[\"']?[^\"'\s][^\"']*", re.IGNORECASE),
+    re.compile(r"^\+.*\bAKIA[0-9A-Z]{16}\b"),                   # AWS access key
+    re.compile(r"^\+.*\bAIza[0-9A-Za-z_\-]{30,}\b"),            # GCP API key
+    re.compile(r"^\+.*\b(sk|rk|pk)_(test|live)_[0-9a-zA-Z]{16,}\b"),  # Stripe
+    re.compile(r"^\+.*\bxox[abposr]-[0-9A-Za-z\-]{20,}\b"),     # Slack
+    re.compile(r"^\+.*\bgithub_pat_[0-9A-Za-z_]{20,}\b"),       # GitHub PAT
+    re.compile(r"^\+.*\bghp_[0-9A-Za-z]{30,}\b"),               # GitHub classic
+)
+
+
+def _is_denied(path: str) -> bool:
+    if any(path.startswith(p) for p in _DENY_PATHS):
+        return True
+    if any(path.endswith(s) for s in _DENY_SUFFIXES):
+        return True
+    return False
+
+
+def _scan_diff_for_secrets(repo: Path) -> list[str]:
+    """Scan the most recent commit's diff for secret-shaped lines.
+
+    Runs against HEAD vs HEAD~1 (i.e. what we're about to push).
+    Returns a list of offending line snippets; empty = clean.
     """
-    # NB: state/* is .gitignored (Mako's working memory) — including
-    # state/META_REPORTS.md. The meta wrapper still writes META_REPORTS
-    # to disk for forensic visibility, just doesn't try to commit it.
-    allowed_prefixes = ("prompts/", "config.yaml")
-    out: dict = {"committed": False, "skipped": [], "added": []}
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(repo), "diff", "HEAD~1", "HEAD", "--unified=0"],
+            capture_output=True, text=True, timeout=15)
+    except Exception as e:
+        # If we can't scan, abort the push (fail closed)
+        return [f"could not run git diff: {e}"]
+    if r.returncode != 0:
+        return [f"git diff rc={r.returncode}: {r.stderr[:200]}"]
+    hits: list[str] = []
+    for line in r.stdout.splitlines():
+        for pat in _SECRET_LINE_PATTERNS:
+            if pat.search(line):
+                hits.append(line[:200])
+                break
+    return hits
+
+
+def _git_push(repo: Path) -> dict:
+    """Push origin/main. Returns {ok, rc, stdout, stderr}."""
+    try:
+        r = subprocess.run(["git", "-C", str(repo), "push", "origin", "main"],
+                           capture_output=True, text=True, timeout=60)
+        return {"ok": r.returncode == 0, "rc": r.returncode,
+                "stdout": r.stdout[-500:], "stderr": r.stderr[-500:]}
+    except Exception as e:
+        return {"ok": False, "rc": -1, "error": f"{type(e).__name__}: {e}"}
+
+
+def git_commit_meta_changes(repo: Path, meta_n: int, codex_summary: str = "") -> dict:
+    """Codex's sandbox mounts .git read-only, so it commits via us.
+
+    Whitelist is now permissive: any tracked-or-untracked file dirty after
+    a meta run gets committed, EXCEPT files matching _DENY_PATHS/_DENY_SUFFIXES.
+    `.gitignore` already keeps secrets and runtime state out, but we also
+    pre-screen paths and post-screen the diff for secret-shaped values.
+
+    After commit, we git push origin main — but only if the diff scan
+    is clean. A failed scan means the commit stays local; Chris is
+    alerted via the meta status post.
+    """
+    out: dict = {"committed": False, "pushed": False, "skipped": [], "added": []}
     try:
         r = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
                            capture_output=True, text=True, timeout=10)
@@ -266,17 +374,14 @@ def git_commit_meta_changes(repo: Path, meta_n: int, codex_summary: str = "") ->
 
     to_add: list[str] = []
     for line in r.stdout.splitlines():
-        # porcelain format: 'XY <path>' (X=staged, Y=unstaged)
+        # porcelain format: 'XY <path>' (X=staged, Y=unstaged); untracked is '?? <path>'
         path = line[3:].strip()
-        # untracked: '?? path'
-        if line.startswith("??"):
-            path = line[3:].strip()
-        if any(path.startswith(p) for p in allowed_prefixes):
-            to_add.append(path)
-        else:
+        if _is_denied(path):
             out["skipped"].append(path)
+            continue
+        to_add.append(path)
     if not to_add:
-        out["note"] = "dirty files all outside meta whitelist; refusing to commit"
+        out["note"] = "dirty files all on deny list; refusing to commit"
         return out
 
     try:
@@ -297,6 +402,18 @@ def git_commit_meta_changes(repo: Path, meta_n: int, codex_summary: str = "") ->
         out["commit_msg"] = msg
     except Exception as e:
         out["error"] = f"{type(e).__name__}: {e}"
+        return out
+
+    # Pre-push secret scan — fail closed
+    secret_hits = _scan_diff_for_secrets(repo)
+    if secret_hits:
+        out["push_aborted"] = "secret-shaped content in diff"
+        out["secret_hits"] = secret_hits[:5]
+        return out
+
+    push_res = _git_push(repo)
+    out["push"] = push_res
+    out["pushed"] = bool(push_res.get("ok"))
     return out
 
 
@@ -366,16 +483,29 @@ def main() -> int:
         full["ended_at"] = now_iso()
         write_full_log(paths.logs, meta_n, full)
 
-        # Telegram blow-by-blow
-        log_thread = cfg["telegram"].get("log_thread_id")
+        # Telegram blow-by-blow → meta thread (fallback log)
+        meta_thread = (cfg["telegram"].get("meta_thread_id")
+                       or cfg["telegram"].get("log_thread_id"))
         if codex_res.get("ok"):
             committed = commit_res.get("committed")
+            pushed = commit_res.get("pushed")
             added = commit_res.get("added") or []
             skipped = commit_res.get("skipped") or []
             note = commit_res.get("note") or ""
-            if committed:
-                msg = (f"🧠 meta #{meta_n} · {wall}s · committed\n"
+            if committed and pushed:
+                msg = (f"🧠 meta #{meta_n} · {wall}s · committed + pushed\n"
                        f"files: {', '.join(added)[:200]}")
+            elif committed and commit_res.get("push_aborted"):
+                hits = commit_res.get("secret_hits") or []
+                msg = (f"🚨 meta #{meta_n} · {wall}s · committed but PUSH ABORTED\n"
+                       f"reason: {commit_res['push_aborted']}\n"
+                       f"hits: {' / '.join(h[:80] for h in hits[:3])}\n"
+                       f"local commit kept; SSH in and review")
+            elif committed:
+                push_err = (commit_res.get("push") or {}).get("stderr", "") or "no push attempted"
+                msg = (f"⚠️ meta #{meta_n} · {wall}s · committed but push failed\n"
+                       f"files: {', '.join(added)[:200]}\n"
+                       f"err: {push_err[:200]}")
             elif note == "no changes to commit":
                 msg = f"🧠 meta #{meta_n} · {wall}s · no changes (within tolerance)"
             else:
@@ -387,7 +517,7 @@ def main() -> int:
             err = codex_res.get("error") or codex_res.get("stderr", "")[:300]
             msg = f"🧠 meta #{meta_n} · {wall}s · FAIL\n{err[:400]}"
         try:
-            t_mod.telegram_send(cfg, msg, thread_id=log_thread, label="meta")
+            t_mod.telegram_send(cfg, msg, thread_id=meta_thread, label="meta")
         except Exception:
             pass
 
@@ -400,10 +530,11 @@ def main() -> int:
         full["ended_at"] = now_iso()
         write_full_log(paths.logs, meta_n, full)
         try:
-            log_thread = cfg["telegram"].get("log_thread_id")
+            meta_thread = (cfg["telegram"].get("meta_thread_id")
+                           or cfg["telegram"].get("log_thread_id"))
             t_mod.telegram_send(cfg,
                                 f"🧠 meta #{meta_n} · CRASH · {type(e).__name__}: {str(e)[:300]}",
-                                thread_id=log_thread, label="meta-crash")
+                                thread_id=meta_thread, label="meta-crash")
         except Exception:
             pass
         return 2

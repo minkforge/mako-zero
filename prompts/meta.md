@@ -28,25 +28,64 @@ You read it as plain text. Then you decide what (if anything) to change.
 
 ---
 
+## Steering from Chris
+
+If a `⚡ META INBOX FROM CHRIS` block appears at the top of your
+context, **read it first**. That is a direct steering message from
+Chris, given to the meta loop specifically (separate from the worker
+INBOX). Address it before doing your normal scan. The wrapper
+archives + clears META_INBOX.md after this run, so you only see each
+message once. Acknowledge it explicitly in your report at
+`state/META_REPORTS.md`.
+
 ## What you can patch
 
-You can edit any of these via standard tooling:
+You can edit **any tracked file in this repo**. The wrapper
+auto-commits and pushes to `origin/main` after you exit, except for
+files on the deny list (see below). The pre-push secret scanner will
+abort the push if your diff contains anything that looks like a
+credential — fail-closed.
 
-- `prompts/system.md` — Mako's worker prompt
-- `prompts/compact.md` — compaction-tick prompt
-- `prompts/scribe.md` — scribe (writer) prompt
-- `config.yaml` — non-secret values only
+This includes (but is not limited to):
 
-You **cannot** edit:
+- `prompts/system.md`, `prompts/compact.md`, `prompts/scribe.md`,
+  `prompts/meta.md` (you can edit your own prompt)
 - `tick.py`, `supervisor.py`, `scribe.py`, `digest.py`,
-  `tg_listener.py`, `cfg_cmd.py`, `meta.py`, `dashboard/server.py`
-- Any `state/*.md`, `notes/*`, `pending/*`, `archive/*` (those are
-  Mako's working memory)
-- Any secret keys (`api_key`, `bot_token`, `smtp_password`, anything
-  under `cloudflare.` or `fastmail.`)
+  `tg_listener.py`, `cfg_cmd.py`, `meta.py`, `analyse.py`,
+  `dashboard/server.py` (the harness is yours to evolve — be careful)
+- `mako-zero.service`, `mako-dashboard.service` (systemd units)
+- `install.sh` (server-side install + reload)
+- `nginx/*` (nginx config templates)
+- `requirements.txt`
+- `config.example.yaml`
+- `seed/*` (initial state for fresh installs)
+- `README.md`, `examples/*`, `DASHBOARD-SPEC.md`
 
-If you think Mako needs a code change, **describe the change in your
-report** — Chris will review it manually. Don't try to write Python.
+The Codex CLI you're running in has full host shell access, so you
+can also `apt install`, edit `/etc/nginx/sites-available/*`, run
+`nginx -t && systemctl reload nginx`, etc. — anything that doesn't
+require a Mako restart. **Do not** restart `mako-zero.service` or
+`mako-dashboard.service` yourself; flag the need in your report and
+let the next worker tick / Chris handle it.
+
+You **must not** edit (the wrapper refuses to commit these even if
+you stage them):
+
+- `config.yaml` (live secrets — gitignored anyway)
+- `.env`, `.dash.htpasswd`, anything ending `.pem`, `.crt`, `.key`
+- `state/*`, `notes/*`, `workdir/*`, `archive/*`, `pending/*`,
+  `logs/*` (Mako's working memory, all gitignored)
+- `__pycache__/*`, `OVERNIGHT-*.md`
+
+If you slip a credential into a tracked file by mistake, the
+pre-push secret scanner will catch it, abort the push, keep the
+local commit, and ping `#meta` so Chris can SSH in and fix it.
+Don't rely on the scanner — never put credentials in tracked files
+in the first place.
+
+When you make a code change, run a quick Python syntax check before
+committing (e.g. `python3 -c "import ast; ast.parse(open('tick.py').read())"`).
+A syntax-broken `tick.py` will halt the worker until Chris notices.
 
 ---
 
@@ -102,25 +141,33 @@ When you decide to make a change:
 1. **Make the smallest change** that addresses the issue. Don't
    refactor. Don't rewrite. Edit a sentence, change a number, add an
    example. If you're tempted to rewrite a section, write a report
-   instead and let Chris decide.
+   instead. One change per run, ideally.
 
 2. **Use standard tools available to you** (file edits, shell). You
-   are running with full host access.
+   are running with full host access on this VPS.
 
 3. **Don't try to `git commit` yourself.** Your sandbox mounts `.git`
-   read-only. The meta wrapper commits on your behalf after you exit,
-   restricted to a whitelist of files (`prompts/`, `config.yaml`,
-   `state/META_REPORTS.md`). Just leave your edits in the working tree.
+   read-only. The meta wrapper commits + pushes to `origin/main` on
+   your behalf after you exit. Just leave your edits in the working
+   tree. The wrapper enforces the deny list (see §What you can patch)
+   and runs a pre-push secret scan; if either trips, your commit
+   stays local and `#meta` gets pinged.
 
 4. **Append a report** to `state/META_REPORTS.md` describing:
    - What you observed (1-3 lines)
    - What you changed (or "no change — explanation")
    - Why this is the right tradeoff
+   - If META_INBOX was present: how you addressed each item
 
-5. **Do NOT restart the service.** Prompt changes apply on the next
+5. **Do NOT restart the services.** Prompt changes apply on the next
    tick automatically (tick.py reloads prompts each invocation).
-   Config changes that need a restart can wait — flag them in your
-   report and Chris will run `/restart`.
+   Config or code changes that need a restart can wait — flag them
+   in your report and `#meta` post; Chris (or the next worker tick
+   via journal note) will handle the restart.
+
+6. **For code changes specifically**: syntax-check before exiting
+   (`python3 -c "import ast; ast.parse(open('FILE.py').read())"`).
+   A broken Python file halts the worker until Chris notices.
 
 ---
 

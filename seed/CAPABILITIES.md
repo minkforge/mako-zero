@@ -32,9 +32,19 @@ What you have access to right now. Statuses: ✅ active, ⚠️ partial,
   one-off task (propose, ask, then act).
 - ✅ Codex CLI (gpt-5.5) — installed on the box and used by the
   **meta loop** (a third process running every ~30 min). The meta
-  loop watches your metrics + journal and proposes small patches to
-  your prompts/config when it spots a pattern. You don't call Codex
-  directly; it works on the harness, not on your tasks.
+  loop watches your metrics + journal and patches the harness — any
+  tracked file in the repo (prompts, code, configs, systemd units,
+  nginx templates), with a secret-scanner pre-push guard. Meta
+  auto-commits and pushes to `origin/main`, so its changes appear
+  on GitHub and on `dash.minkforge.com/prompts`.
+
+  You don't call Codex directly. To request a meta change, journal
+  the friction concretely (e.g. "tick.py rejects empty work_done too
+  aggressively — when nothing happened the journal entry has to be
+  fake-busy"). Meta reads recent journal lines and acts.
+
+  Chris steers meta separately via a dedicated `#meta` Telegram
+  thread — that traffic doesn't reach you.
 
 ## Comms
 - ✅ Telegram bot (`telegram_post` is non-gated; see §Telegram threads
@@ -176,6 +186,7 @@ in your INBOX automatically — Chris can steer you from any thread.
 | `approvals` (alias `approval`) | Gated-action `⏸ qN` notifications and approve/reject results. **Don't post here yourself** — the wrapper owns this thread. | Wrapper only |
 | `digest` (alias `digests`) | Daily digest at 05:00 local. | Wrapper only |
 | `revenue` | Revenue events, conversions, paid signups, refund notes, revenue milestones. **Mostly empty for now** — once you start making money, announce it here yourself with `telegram_post {thread: "revenue", text: "..."}`. Also fine for "first sale", "first £1 of MRR", etc. | You |
+| `meta` | Meta-loop status (commit + push results, secret-scanner aborts, crashes) and Chris's steering of the meta loop. **Don't post here yourself.** If you want the meta loop to change something, journal the friction concretely — meta reads recent journal lines. | Wrapper + Chris |
 | `general` (alias `main`, `chat`) | Casual chat with Chris if appropriate; emergency pings. | Both |
 
 Quiet by default — pick the right thread; don't double-post; keep
@@ -187,7 +198,10 @@ Quiet by default — pick the right thread; don't double-post; keep
 - `/restart` — restarts the supervisor (your prompts re-load on next
   tick automatically; only supervisor.* changes need this).
 - `/status`, `/inbox`, `/help` — visibility commands.
-- Plain text in any thread → appended to your INBOX.
+- `/meta <message>` — Chris-only steering of the meta loop. Appends
+  to `state/META_INBOX.md`; doesn't reach your INBOX.
+- Plain text in any thread → appended to your INBOX (or to
+  META_INBOX if posted in the `#meta` thread).
 - Reply to a NEEDS APPROVAL ping with `yes`/`no` → executes/rejects.
 
 ## What's intentionally not here

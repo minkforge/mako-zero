@@ -20,6 +20,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -339,6 +340,28 @@ def cmd_status(cfg_path: Path, paths_root: Path) -> str:
             f"{av_line}")
 
 
+def cmd_meta(paths_root: Path, message: str) -> str:
+    """Append a steering message to state/META_INBOX.md.
+
+    Meta reads this file at the start of each run and archives it after.
+    Use this to give the meta loop high-level direction without
+    touching the worker INBOX (e.g. "stop tweaking the scribe prompt
+    for now", "investigate why ticks are slow", "add a confidence
+    nudge to system.md").
+    """
+    msg = message.strip()
+    if not msg:
+        return "usage: /meta <message>"
+    state_dir = paths_root / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    p = state_dir / "META_INBOX.md"
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    entry = f"\n[/meta · {ts}]\n{msg}\n"
+    with p.open("a", encoding="utf-8") as f:
+        f.write(entry)
+    return f"📥 META_INBOX += {len(msg)} chars (next meta tick will see it)"
+
+
 def cmd_inbox(paths_root: Path) -> str:
     p = paths_root / "state" / "INBOX.md"
     if not p.exists():
@@ -362,11 +385,12 @@ def cmd_help() -> str:
         "/restart                restart the mako-zero service\n"
         "/status                 last tick, queue, availability\n"
         "/inbox                  show current INBOX.md (what Mako sees next tick)\n"
+        "/meta <message>         steer the meta loop (appends to META_INBOX.md)\n"
         "/help                   this message\n"
         "\n"
         "Anything else (no leading slash): appended to INBOX.md as steering "
-        "for the next tick. Reply to a NEEDS APPROVAL ping with yes/no/etc. "
-        "to approve/reject."
+        "for the next tick — or to META_INBOX.md if posted in the #meta thread. "
+        "Reply to a NEEDS APPROVAL ping with yes/no/etc. to approve/reject."
     )
 
 
@@ -388,6 +412,8 @@ def handle_command(text: str, cfg_path: Path, paths_root: Path) -> str | None:
         return cmd_status(cfg_path, paths_root)
     if head == "inbox":
         return cmd_inbox(paths_root)
+    if head == "meta":
+        return cmd_meta(paths_root, " ".join(parts[1:]))
     if head == "restart":
         return cmd_restart()
     if head == "cfg":

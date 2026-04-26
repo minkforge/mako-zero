@@ -401,13 +401,25 @@ def telegram_poller(cfg: dict, paths_root: Path, shutdown: threading.Event,
                     reply_ctx = f' (reply to: "{rt_text[:200].replace(chr(10), " ")}")'
                 entry = f"\n[telegram · thread {thread_id} · {ts}{reply_ctx}]\n{text}\n"
 
+                # Route meta-thread inbound to META_INBOX.md (steering for the
+                # meta loop, not the worker). Everything else → INBOX.md.
+                meta_thread_id = cfg.get("telegram", {}).get("meta_thread_id") or 0
+                if meta_thread_id and thread_id_raw == int(meta_thread_id):
+                    target = state_dir / "META_INBOX.md"
+                    audit_kind = "meta-steering"
+                    label = "meta-inbox"
+                else:
+                    target = inbox_path
+                    audit_kind = "steering"
+                    label = "inbox"
+
                 state_dir.mkdir(parents=True, exist_ok=True)
-                with inbox_path.open("a", encoding="utf-8") as f:
+                with target.open("a", encoding="utf-8") as f:
                     f.write(entry)
                 wrote_any = True
-                log(f"[tg-listener] inbox += {len(text)} chars from thread {thread_id}")
+                log(f"[tg-listener] {label} += {len(text)} chars from thread {thread_id}")
                 try:
-                    _audit(paths_root, {"kind": "steering", "by": "telegram",
+                    _audit(paths_root, {"kind": audit_kind, "by": "telegram",
                                         "thread": str(thread_id),
                                         "text": text[:500]})
                 except Exception:
