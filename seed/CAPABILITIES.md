@@ -60,18 +60,40 @@ What you have access to right now. Statuses: ✅ active, ⚠️ partial,
   experiment (don't ask preemptively).
 
 ## Domain & web
-- ✅ minkforge.com via Cloudflare API — `cf_api` action,
-  approval-gated. DNS includes A records for `dash.minkforge.com`
-  (the dashboard) and `blog.minkforge.com` (your blog), plus
-  Fastmail MX.
-- ✅ `blog.minkforge.com` — your blog. Live, served by nginx on this
-  box, SSL via Let's Encrypt. The scribe publishes here autonomously
-  (max 2/day). Files at `/var/www/html/blog/`. Renderer is a 60-line
-  markdown→HTML shim — fine for now, swap for a proper SSG later
-  when post volume justifies.
-- ✅ Subdomains under `*.minkforge.com` are yours. To stand up a new
-  one (e.g. for a tool experiment), emit a `cf_api` action to add a
-  DNS A record pointing at this VPS, then configure nginx via shell.
+- ✅ **Wildcard DNS preconfigured.** Both `minkforge.com` and
+  `*.minkforge.com` already resolve to this VPS via Cloudflare proxy.
+  You do **not** need DNS changes (or `cf_api`) to stand up a new
+  subdomain. Anything you serve from this box at any
+  `*.minkforge.com` host is live on the public internet the moment
+  nginx accepts the config — be deliberate.
+- ✅ Standing up a new subdomain (e.g. `tool.minkforge.com`):
+  1. Write an nginx site config to
+     `/etc/nginx/sites-available/<name>.minkforge.com.conf` and
+     symlink it into `sites-enabled/`.
+  2. Get a cert: `certbot --nginx -d <name>.minkforge.com`
+     (certbot is installed; it'll wire SSL into nginx for you).
+  3. `nginx -t && systemctl reload nginx`.
+  No DNS work required. No `cf_api` call required for routing.
+- ⚠️ Cloudflare Flexible SSL gotcha: CF→origin is HTTP. If you write
+  nginx redirects, hardcode `https://$host` in the `Location` header.
+  A `return 301 $scheme://$host$request_uri` loops because CF passes
+  the http:// redirect back to the browser.
+- ✅ `cf_api` (approval-gated) — still available for non-routing
+  Cloudflare work (DNS records for email, page rules, zone settings).
+  You probably won't need it for normal subdomain work.
+- ✅ `blog.minkforge.com` — your blog. Live. Served by nginx from
+  `/var/www/html/blog/`. SSL via Let's Encrypt. **The scribe owns
+  this directory** — the scribe publishes autonomously (max 2/day).
+  Don't write to `/var/www/html/blog/` yourself; if you need to read
+  a published post, use `read_file`. Renderer is a 60-line
+  markdown→HTML shim — fine for now.
+- ✅ `dash.minkforge.com` — your dashboard. **Off-limits.** See
+  §What's intentionally not here for the don't-touch list.
+- ✅ The apex `minkforge.com` is yours to design. After a fresh
+  install nothing serves the apex — you pick what to put there
+  (e.g. a landing page that links to `/blog` and `/dash/public`,
+  a static about page, a tool, whatever fits the experiment).
+- ✅ Other domains: not yours. Stick to `*.minkforge.com`.
 
 ## Accounts (external platforms)
 - ✅ GitHub `minkforge` — PAT works (verified). The mako-zero repo at
@@ -159,12 +181,34 @@ every ~30 min. Chris adjusts in config.yaml; you can't.
   off until Chris explicitly opens the door via INBOX. Don't propose
   it. Don't request the accounts. Don't journal hopeful "once I have
   a Reddit account..." plans. When Chris is ready, he'll say so.
-- Self-modification soft-guard: don't write to `/srv/mako-zero/tick.py`,
-  `supervisor.py`, `prompts/`, `config.yaml`, `mako-zero.service`,
-  `meta.py`, `dashboard/server.py`, or any `*.service` unit.
-  Technically you have root and could; the contract is that you don't.
-  The meta loop handles prompt/config tuning via Codex; if you want
-  changes there, journal the friction so the meta loop can see it.
+- **Off-limits list — don't touch.** You have root, so technically
+  nothing stops you. The contract is that you don't:
+  - **The harness:** `/srv/mako-zero/tick.py`, `supervisor.py`,
+    `scribe.py`, `digest.py`, `tg_listener.py`, `cfg_cmd.py`,
+    `meta.py`, `dashboard/server.py`, `prompts/*`, `config.yaml`,
+    `mako-zero.service`, `mako-dashboard.service`, any other
+    `*.service` unit. The meta loop handles prompt/config tuning;
+    if you want changes there, journal the friction so the meta
+    loop can see it.
+  - **The dashboard:** `dash.minkforge.com` runs from
+    `mako-dashboard.service` on `127.0.0.1:8050`, fronted by nginx.
+    Don't touch `/etc/nginx/sites-available/dash.minkforge.com.conf`,
+    `/etc/nginx/sites-enabled/dash.minkforge.com.conf`,
+    `/etc/nginx/.dash.htpasswd` (the basic-auth file), or port 8050.
+    The basic auth on `/now`, `/steering`, `/approvals`, `/logs`
+    must stay in place — Chris uses those views, they protect his
+    private workflow, and removing the auth would expose your
+    approval queue to the open internet. Don't propose this. Don't
+    do it. The public views (`/public`, `/audit`, `/prompts`,
+    `/api/public.json`, `/api/audit.json`, `/healthz`) are
+    deliberately unauthenticated — leave that alone too.
+  - **The blog filesystem:** `/var/www/html/blog/` — the scribe owns
+    it. Read via `read_file` if needed; never write.
+  - **TLS certs:** `/etc/letsencrypt/*` — certbot manages these on
+    auto-renew. Don't touch.
+  - **The mako-dashboard service itself:** don't `systemctl
+    stop/disable/restart mako-dashboard`. If you genuinely think the
+    dashboard needs a change, `ask_chris`.
 - No outbound contact with real humans (besides Chris) without approval.
 
 This file may be edited by Chris as accounts get unblocked. You can
