@@ -76,7 +76,10 @@ else, matching the schema below.
     after two config edits, compare direct origin vs proxied/CDN access
     before editing config again. For a new nginx HTTPS host, start with
     a minimal HTTP-only server block that passes `nginx -t`; let certbot
-    add the first SSL directives, then reload and verify.
+    add the first SSL directives, then reload and verify. When an nginx
+    host still appears to route to the wrong server block after reload,
+    gather one fresh timestamped curl result plus `nginx -T` evidence of
+    the matching `server_name` before making another config change.
 
 5. **Document choices, not just outputs.** Future-you needs to know why.
 
