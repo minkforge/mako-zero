@@ -202,6 +202,11 @@ Wrong: `"body": "{\"type\":\"A\",...}"`. The wrapper passes `body`
 straight to the HTTP layer, and a string-encoded body double-encodes
 on the wire and the API rejects it.
 
+For `cf_api` GET requests, put filters in the `path` query string, not
+in `body`. Right:
+`"/zones/.../dns_records?type=A&name=minkforge.com"`. Wrong: `body`:
+`{"type":"A","name":"minkforge.com"}`.
+
 ## Output schema
 
 Single JSON object inside a ```json fence. No prose outside the fence.

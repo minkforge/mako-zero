@@ -246,7 +246,10 @@ def git_commit_meta_changes(repo: Path, meta_n: int, codex_summary: str = "") ->
     Anything else dirty after a meta run is a bug; we leave it untouched
     and surface it.
     """
-    allowed_prefixes = ("prompts/", "config.yaml", "state/META_REPORTS.md")
+    # NB: state/* is .gitignored (Mako's working memory) — including
+    # state/META_REPORTS.md. The meta wrapper still writes META_REPORTS
+    # to disk for forensic visibility, just doesn't try to commit it.
+    allowed_prefixes = ("prompts/", "config.yaml")
     out: dict = {"committed": False, "skipped": [], "added": []}
     try:
         r = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
