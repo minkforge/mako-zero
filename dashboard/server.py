@@ -70,6 +70,23 @@ def favicon_link() -> str:
     return f'<link rel="icon" type="image/png" href="{uri}">'
 
 
+def _inbox_preview(text: str, limit: int = 2000) -> str:
+    """Cap inbox text length for the /now widget. Cuts at the last newline
+    before the limit so we never slice mid-string (which produced jarring
+    fragments like `[ap`). Adds a clear truncation marker if anything was
+    omitted."""
+    if not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    nl = head.rfind("\n")
+    if nl > 0:
+        head = head[:nl]
+    omitted = len(text) - len(head)
+    return f"{head}\n\n[… {omitted} more chars · open /steering for full INBOX]"
+
+
 def _fmt_london(ts: str) -> str:
     """Convert an ISO-8601 timestamp (UTC) to Europe/London local time.
 
@@ -319,7 +336,7 @@ def _now_body(d: dict) -> str:
     dot = "green" if av["in_window"] else "amber"
     inbox_warn = (f'<div class="card" style="border-color:#4a3a1d;">'
                   f'<h2>⚡ inbox waiting</h2>'
-                  f'<pre>{d["inbox"][:600]}</pre>'
+                  f'<pre>{_inbox_preview(d["inbox"])}</pre>'
                   f'<div class="muted">Mako will read this on next tick.</div></div>'
                   if d["inbox"] else "")
 
