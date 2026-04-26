@@ -72,7 +72,7 @@ def read_redacted_config(p: Path) -> str:
     out_lines = []
     for line in text.splitlines():
         low = line.lower()
-        if any(s in low for s in ("api_key:", "bot_token:", "smtp_password:", "token:")):
+        if any(s in low for s in ("api_key:", "bot_token:", "smtp_password:", "token:", "password:")):
             # crude redaction — keep `key: ` part, drop value
             head = line.split(":", 1)[0]
             out_lines.append(f"{head}: [REDACTED]")
