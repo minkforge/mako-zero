@@ -348,6 +348,17 @@ def main() -> int:
             text = f"📝 scribe #{run_n} · {wall}s · {slot}/{model} · skipped: {str(reason)[:280]}"
             res = t.telegram_send(cfg, text, thread_id=cfg["telegram"]["log_thread_id"], label="scribe-skip")
             full_log["telegram_posts"].append({"text": text, "thread_id": cfg["telegram"]["log_thread_id"], "result": res})
+            try:
+                aud = paths.logs / "audit.jsonl"
+                aud.parent.mkdir(parents=True, exist_ok=True)
+                with aud.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps({
+                        "ts": t.now_iso(), "kind": "scribe-skip", "by": "scribe",
+                        "run_n": run_n, "wall_s": wall,
+                        "reason": str(reason)[:300],
+                    }, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
         else:
             raise RuntimeError(f"scribe: unexpected kind {kind!r}")
 
@@ -360,6 +371,14 @@ def main() -> int:
             wall = round(time.time() - t_start, 2)
             text = f"📝 scribe #{run_n} FAIL · {wall}s · {type(e).__name__}: {str(e)[:200]}"
             t.telegram_send(cfg, text, thread_id=cfg["telegram"]["log_thread_id"], label="scribe-fail")
+            aud = paths.logs / "audit.jsonl"
+            aud.parent.mkdir(parents=True, exist_ok=True)
+            with aud.open("a", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "ts": t.now_iso(), "kind": "scribe-fail", "by": "scribe",
+                    "run_n": run_n, "error_type": type(e).__name__,
+                    "error_message": str(e)[:300],
+                }, ensure_ascii=False) + "\n")
         except Exception:
             pass
         if cfg.get("logging", {}).get("full_payload", True):

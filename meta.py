@@ -434,6 +434,35 @@ def git_commit_meta_changes(repo: Path, meta_n: int, codex_summary: str = "") ->
     return out
 
 
+def _classify_meta_status(commit_res: dict, codex_ok: bool) -> str:
+    """Boil a commit_res dict down to one of the audit-status strings."""
+    if not codex_ok:
+        return "codex-failed"
+    if commit_res.get("pushed"):
+        return "committed-pushed"
+    if commit_res.get("push_aborted"):
+        return "push-aborted-secret"
+    if commit_res.get("committed"):
+        return "committed-not-pushed"
+    note = commit_res.get("note") or ""
+    if note.startswith("no changes"):
+        return "no-change"
+    if commit_res.get("error"):
+        return "error"
+    return "unknown"
+
+
+def append_audit(logs: Path, payload: dict) -> None:
+    """Append a single line to logs/audit.jsonl. Best-effort — never raises."""
+    try:
+        p = logs / "audit.jsonl"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception as e:
+        sys.stderr.write(f"meta audit append failed: {e!r}\n")
+
+
 def write_full_log(logs: Path, n: int, payload: dict) -> Path | None:
     out = logs / "meta" / f"{n:08d}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -500,6 +529,21 @@ def main() -> int:
         full["ended_at"] = now_iso()
         write_full_log(paths.logs, meta_n, full)
 
+        # Audit log — every meta run, regardless of outcome
+        status = _classify_meta_status(commit_res, codex_res.get("ok", False))
+        append_audit(paths.logs, {
+            "ts": now_iso(),
+            "kind": "meta",
+            "by": "meta",
+            "run_n": meta_n,
+            "status": status,
+            "wall_s": wall,
+            "files": (commit_res.get("added") or [])[:10],
+            "skipped": (commit_res.get("skipped") or [])[:5],
+            "secret_hits_count": len(commit_res.get("secret_hits") or []),
+            "note": (commit_res.get("note") or "")[:200],
+        })
+
         # Telegram blow-by-blow → meta thread (fallback log)
         meta_thread = (cfg["telegram"].get("meta_thread_id")
                        or cfg["telegram"].get("log_thread_id"))
@@ -546,6 +590,15 @@ def main() -> int:
         full["wall_s"] = round(time.time() - t0, 2)
         full["ended_at"] = now_iso()
         write_full_log(paths.logs, meta_n, full)
+        append_audit(paths.logs, {
+            "ts": now_iso(),
+            "kind": "meta",
+            "by": "meta",
+            "run_n": meta_n,
+            "status": "crash",
+            "error_type": type(e).__name__,
+            "error_message": str(e)[:300],
+        })
         try:
             meta_thread = (cfg["telegram"].get("meta_thread_id")
                            or cfg["telegram"].get("log_thread_id"))

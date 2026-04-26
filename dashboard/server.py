@@ -753,9 +753,13 @@ def audit():
               text-transform: uppercase; letter-spacing: 0.06em; margin: 0 8px; }}
 .audit-approval {{ background: rgba(245,158,11,0.12); color: var(--amber); }}
 .audit-steering {{ background: rgba(34,211,238,0.12); color: var(--acc); }}
+.audit-meta-steering {{ background: rgba(167,139,250,0.12); color: #c4b5fd; }}
 .audit-command  {{ background: rgba(239,68,68,0.12); color: var(--red); }}
 .audit-request_update {{ background: rgba(167,139,250,0.12); color: #a78bfa; }}
 .audit-publish  {{ background: rgba(34,197,94,0.12); color: var(--green); }}
+.audit-meta     {{ background: rgba(167,139,250,0.18); color: #c4b5fd; }}
+.audit-scribe-skip {{ background: rgba(120,120,120,0.15); color: var(--mute); }}
+.audit-scribe-fail {{ background: rgba(239,68,68,0.18); color: var(--red); }}
 .audit-by {{ color: var(--mute); font-size: 11px; }}
 .audit-list pre {{ background: #151515; padding: 8px; margin-top: 6px; font-size: 11px; }}
 </style>
@@ -842,10 +846,25 @@ def _public_stats() -> dict:
         pass
 
     metrics = _metric_stats(logs)
-    audit_rows = _read_audit(root, 1000)
-    interventions_today = sum(1 for r in audit_rows
-                              if (r.get("ts") or "").startswith(today_prefix))
-    interventions_total = len(audit_rows)
+    audit_rows = _read_audit(root, 2000)
+
+    # Interventions = things Chris actively did. Excludes autonomous events
+    # (meta runs, scribe publishes/skips/fails) which would otherwise
+    # inflate the "Chris had to bail him out" counter.
+    INTERVENTION_KINDS = {
+        "approval", "steering", "meta-steering", "command", "request_update",
+    }
+    META_KINDS = {"meta"}
+    SCRIBE_KINDS = {"publish", "scribe-skip", "scribe-fail"}
+
+    def _today(r): return (r.get("ts") or "").startswith(today_prefix)
+
+    interventions_today = sum(1 for r in audit_rows if _today(r) and r.get("kind") in INTERVENTION_KINDS)
+    interventions_total = sum(1 for r in audit_rows           if r.get("kind") in INTERVENTION_KINDS)
+    meta_runs_today     = sum(1 for r in audit_rows if _today(r) and r.get("kind") in META_KINDS)
+    meta_runs_total     = sum(1 for r in audit_rows           if r.get("kind") in META_KINDS)
+    scribe_runs_today   = sum(1 for r in audit_rows if _today(r) and r.get("kind") in SCRIBE_KINDS)
+    scribe_runs_total   = sum(1 for r in audit_rows           if r.get("kind") in SCRIBE_KINDS)
 
     # blog drafts published (count files in published/)
     blog_dir = state / "outbox" / "blog"
@@ -871,6 +890,10 @@ def _public_stats() -> dict:
         "tokens_total_out": tokens_total_out,
         "interventions_today": interventions_today,
         "interventions_total": interventions_total,
+        "meta_runs_today": meta_runs_today,
+        "meta_runs_total": meta_runs_total,
+        "scribe_runs_today": scribe_runs_today,
+        "scribe_runs_total": scribe_runs_total,
     }
 
 
@@ -944,6 +967,13 @@ def public_page():
   <div class="stat"><div class="num-sm">{s["interventions_today"]:,}</div><div class="label">today</div></div>
   <div class="stat"><div class="num-sm">{s["interventions_total"]:,}</div><div class="label">total</div></div>
   <div class="stat"><div class="num-sm" style="font-size:14px;"><a href="/audit" style="color:var(--acc);text-decoration:none;">see all →</a></div><div class="label">full audit log</div></div>
+</div>
+<div class="section-title">supporting loops</div>
+<div class="stats">
+  <div class="stat"><div class="num-sm">{s["meta_runs_today"]:,}</div><div class="label">meta runs · today</div></div>
+  <div class="stat"><div class="num-sm">{s["meta_runs_total"]:,}</div><div class="label">meta runs · total</div></div>
+  <div class="stat"><div class="num-sm">{s["scribe_runs_today"]:,}</div><div class="label">scribe runs · today</div></div>
+  <div class="stat"><div class="num-sm">{s["scribe_runs_total"]:,}</div><div class="label">scribe runs · total</div></div>
 </div>
 <div class="foot">
   last tick · {_fmt_london(s["last_tick_at"]) or "—"}<br>
