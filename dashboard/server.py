@@ -25,6 +25,30 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
+
+LONDON = ZoneInfo("Europe/London")
+
+
+def _fmt_london(ts: str) -> str:
+    """Convert an ISO-8601 timestamp (UTC) to Europe/London local time.
+
+    Returns a string like '2026-04-26 13:38 BST' (or GMT in winter).
+    Returns the input unchanged on parse failure, or '' for empty input.
+    """
+    if not ts:
+        return ""
+    try:
+        # tick.py writes datetime.now(timezone.utc).isoformat(timespec="seconds")
+        # which produces e.g. '2026-04-26T12:38:00+00:00'. Also tolerate trailing 'Z'.
+        s = ts.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        local = dt.astimezone(LONDON)
+        return local.strftime("%Y-%m-%d %H:%M %Z")
+    except (ValueError, TypeError):
+        return ts
 
 # allow `import tick` and `import cfg_cmd` from the parent dir
 ROOT = Path(__file__).resolve().parent.parent
@@ -241,7 +265,7 @@ def _now_body(d: dict) -> str:
           <div class="k">tick</div><div>#{d["tick_n"]}</div>
           <div class="k">pending</div><div>{d["pending_n"]} {("· awaiting your call" if d["pending_n"] else "")}</div>
           <div class="k">availability</div><div><span class="dot {dot}"></span>{av["summary"][:80]}</div>
-          <div class="k">last tick</div><div class="muted">{m.get("last_ts","?")}</div>
+          <div class="k">last tick</div><div class="muted">{_fmt_london(m.get("last_ts","")) or "?"}</div>
           <div class="k">provider</div><div class="muted">{m.get("last_provider","?")}</div>
           <div class="k">wall avg</div><div>{m.get("wall_avg",0)}s · p95 {m.get("wall_p95",0)}s</div>
           <div class="k">parse ok</div><div>{m.get("parse_pct",0)}%</div>
@@ -304,7 +328,7 @@ def now_stats():
           <div class="k">tick</div><div>#{d["tick_n"]}</div>
           <div class="k">pending</div><div>{d["pending_n"]}</div>
           <div class="k">availability</div><div><span class="dot {dot}"></span>{av["summary"][:80]}</div>
-          <div class="k">last tick</div><div class="muted">{m.get("last_ts","?")}</div>
+          <div class="k">last tick</div><div class="muted">{_fmt_london(m.get("last_ts","")) or "?"}</div>
           <div class="k">provider</div><div class="muted">{m.get("last_provider","?")}</div>
           <div class="k">wall avg</div><div>{m.get("wall_avg",0)}s · p95 {m.get("wall_p95",0)}s</div>
           <div class="k">parse ok</div><div>{m.get("parse_pct",0)}%</div>
@@ -835,7 +859,7 @@ def public_page():
   <div class="stat"><div class="num-sm" style="font-size:14px;"><a href="/audit" style="color:var(--acc);text-decoration:none;">see all →</a></div><div class="label">full audit log</div></div>
 </div>
 <div class="foot">
-  last tick · {s["last_tick_at"] or "—"}<br>
+  last tick · {_fmt_london(s["last_tick_at"]) or "—"}<br>
   source: <a href="https://github.com/minkforge/mako-zero">github.com/minkforge/mako-zero</a>
 </div>
 <script src="https://unpkg.com/htmx.org@1.9.10"></script>
