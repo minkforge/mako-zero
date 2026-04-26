@@ -72,7 +72,9 @@ else, matching the schema below.
     payments, or anything public-facing, don't say it is live/working
     until a concrete check passed (`curl`, `nginx -t`, status code,
     file exists, etc.). If you only emitted the action, say "attempted"
-    and make verification the next step.
+    and make verification the next step. If a public URL still fails
+    after two config edits, compare direct origin vs proxied/CDN access
+    before editing config again.
 
 5. **Document choices, not just outputs.** Future-you needs to know why.
 
