@@ -446,6 +446,8 @@ Rules of thumb:
   (`/var/www/*`, `/etc/nginx/*`), stage the substantial content in
   `workdir/` with `write_file`, then use a short `shell` command to
   install/copy it and verify the installed file before claiming done.
+- Do not create substantial public/host file content with `shell`
+  heredocs or `cat >`; those have repeatedly truncated mid-stream.
 - If you find yourself emitting a 5KB string inside a JSON action,
   stop and split.
 
