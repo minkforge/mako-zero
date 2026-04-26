@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
 """Telegram inbound listener — runs as a thread inside supervisor.py.
 
-Long-polls getUpdates against your bot. Any non-command text message
-in the configured chat_id gets appended to state/INBOX.md, so Mako
-sees it on his next tick. If the Telegram message is a reply, the
-original text is included as context.
+Long-polls getUpdates against your bot. Inbound messages are routed:
+
+1. Slash-prefixed messages (/cfg, /restart, /status, /inbox, /help)
+   → dispatched to cfg_cmd.handle_command. Reply posted back to the
+   same thread. Not appended to INBOX.
+
+2. Replies to NEEDS APPROVAL pings → parsed for approve/reject intent
+   and the action is executed or rejected via tick.execute_gated_action.
+
+3. Anything else → appended to state/INBOX.md so Mako sees it on his
+   next tick. If the Telegram message is a reply, the parent text is
+   included as context.
 
 Filters:
 - Messages from the bot itself (loopback) are skipped.
-- Messages starting with "/" are treated as bot commands and skipped.
 - Empty / non-text messages skipped.
 - Only the configured chat_id is honoured.
 
@@ -233,7 +240,7 @@ def telegram_poller(cfg: dict, paths_root: Path, shutdown: threading.Event,
                 if str(msg.get("chat", {}).get("id")) != chat_id:
                     continue
                 text = (msg.get("text") or "").strip()
-                if not text or text.startswith("/"):
+                if not text:
                     continue
                 if (msg.get("from") or {}).get("is_bot"):
                     continue
@@ -241,6 +248,26 @@ def telegram_poller(cfg: dict, paths_root: Path, shutdown: threading.Event,
                 thread_id_raw = msg.get("message_thread_id", 0)
                 thread_id = thread_id_raw or "main"
                 ts = datetime.fromtimestamp(msg.get("date", time.time())).strftime("%H:%M")
+
+                # Slash-prefixed → command dispatch
+                if text.startswith("/"):
+                    try:
+                        import cfg_cmd
+                        import tick as t_mod
+                        cfg_path = paths_root / "config.yaml"
+                        reply = cfg_cmd.handle_command(text, cfg_path, paths_root)
+                    except Exception as e:
+                        reply = f"❌ command error: {type(e).__name__}: {e}"
+                    if reply is not None:
+                        try:
+                            t_mod.telegram_send(cfg, reply,
+                                                thread_id=thread_id_raw or None,
+                                                label="cmd")
+                        except Exception as e:
+                            log(f"[tg-listener] reply send failed: {e!r}")
+                        log(f"[tg-listener] /cmd: {text[:60]} → {reply[:80]!r}")
+                        continue
+                    # Unrecognised /cmd — fall through and let it land in INBOX
 
                 rt = msg.get("reply_to_message") or {}
                 rt_text = (rt.get("text") or "")
