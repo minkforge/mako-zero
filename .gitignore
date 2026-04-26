@@ -26,6 +26,9 @@ Thumbs.db
 .idea/
 .vscode/
 
+# Codex CLI session marker (created in cwd when meta runs)
+.codex
+
 # Build artefacts
 *.log
 
