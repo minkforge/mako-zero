@@ -87,6 +87,18 @@ scribe:
   max_drafts_per_run: 1        # avoid flooding the outbox
   approval_thread: approvals   # approvals | requests | log
 
+# Chris's working hours. Mako sees this in hot context and is told to defer
+# approval-needing work outside the window. Approval pings still queue
+# out-of-hours but go silent (no phone buzz) — they'll be visible in the
+# channel when you check. Empty `windows` = always available.
+availability:
+  tz: Europe/London
+  windows:
+    - { days: [mon, tue, wed, thu, fri], start: "09:00", end: "18:00" }
+  sla_in_window_min: 60
+  sla_out_window_min: 720
+  suppress_approval_pings_out_of_window: true
+
 logging:
   full_payload: true           # write logs/ticks/<n>.json with raw req/resp
   keep_days: 14                # `find logs/ticks logs/scribe -mtime +N -delete`

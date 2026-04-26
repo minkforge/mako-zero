@@ -197,6 +197,12 @@ def assemble_hot_context(cfg: dict, paths: Paths, requested_notes: list[str],
         parts.append((label, content))
         sizes[label] = est_tokens(content)
 
+    av = compute_availability(cfg)
+    add("AVAILABILITY (Chris's working window)",
+        f"in_window: {av['in_window']}\n"
+        f"sla_min: {av['sla_min']}\n"
+        f"tz: {av['tz']}\n"
+        f"summary: {av['summary']}")
     add("MISSION.md", read_text(paths.state / "MISSION.md"))
     if inbox_snap and inbox_snap.get("content", "").strip():
         add("⚡ INBOX FROM CHRIS — read carefully; wrapper will archive after this tick",
@@ -361,6 +367,87 @@ def call_provider(spec: dict, system: str, user: str) -> tuple[str, dict]:
     if t == "openai_compat":
         return call_openai_compat(spec, system, user)
     raise ProviderError(f"unknown provider type {t}")
+
+
+# ----------------------- availability ----------------------------------
+
+_DAY_LOOKUP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+
+def _local_now(tz_name: str) -> datetime:
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo(tz_name))
+    except Exception:
+        return datetime.now()
+
+
+def compute_availability(cfg: dict) -> dict:
+    """Returns {in_window, sla_min, tz, windows, next_change_iso, summary}.
+    If `availability` is missing or empty windows, returns in_window=true and
+    sla_min from sla_in_window_min default — i.e. "always available"."""
+    av = cfg.get("availability") or {}
+    tz_name = av.get("tz", "Europe/London")
+    windows_raw = av.get("windows") or []
+    in_min = int(av.get("sla_in_window_min", 60))
+    out_min = int(av.get("sla_out_window_min", 720))
+    if not windows_raw:
+        return {"in_window": True, "sla_min": in_min, "tz": tz_name,
+                "next_change_iso": None, "summary": "always available (no windows configured)"}
+    now = _local_now(tz_name)
+    in_window = False
+    current_end: datetime | None = None
+    for offset in range(0, 8):
+        from datetime import timedelta
+        day = now + timedelta(days=offset)
+        day_idx = day.weekday()
+        for w in windows_raw:
+            days = [_DAY_LOOKUP.get(str(d).lower()[:3], -1) for d in (w.get("days") or [])]
+            if day_idx not in days:
+                continue
+            try:
+                sh, sm = (int(x) for x in str(w["start"]).split(":"))
+                eh, em = (int(x) for x in str(w["end"]).split(":"))
+            except (ValueError, KeyError):
+                continue
+            start_t = day.replace(hour=sh, minute=sm, second=0, microsecond=0)
+            end_t = day.replace(hour=eh, minute=em, second=0, microsecond=0)
+            if offset == 0 and start_t <= now < end_t:
+                in_window = True
+                current_end = end_t
+                break
+        if in_window:
+            break
+    next_change: datetime | None = current_end
+    if not in_window:
+        # find the next start time across the upcoming week
+        from datetime import timedelta
+        soonest: datetime | None = None
+        for offset in range(0, 8):
+            day = now + timedelta(days=offset)
+            day_idx = day.weekday()
+            for w in windows_raw:
+                days = [_DAY_LOOKUP.get(str(d).lower()[:3], -1) for d in (w.get("days") or [])]
+                if day_idx not in days:
+                    continue
+                try:
+                    sh, sm = (int(x) for x in str(w["start"]).split(":"))
+                except (ValueError, KeyError):
+                    continue
+                start_t = day.replace(hour=sh, minute=sm, second=0, microsecond=0)
+                if start_t > now and (soonest is None or start_t < soonest):
+                    soonest = start_t
+        next_change = soonest
+    summary = (f"in-window (Chris likely responsive · SLA {in_min}m · "
+               f"closes {current_end.strftime('%a %H:%M') if current_end else '?'})"
+               if in_window
+               else f"out-of-window (Chris likely asleep/away · SLA {out_min}m · "
+                    f"opens {next_change.strftime('%a %H:%M') if next_change else '?'} · "
+                    f"avoid blocking on approvals; do solo work)")
+    return {"in_window": in_window, "sla_min": in_min if in_window else out_min,
+            "tz": tz_name, "windows": windows_raw,
+            "next_change_iso": next_change.isoformat(timespec="minutes") if next_change else None,
+            "summary": summary}
 
 
 def call_llm_with_fallback(cfg: dict, system: str, user: str) -> tuple[str, dict, list[str], list[dict]]:
@@ -603,6 +690,19 @@ def exec_email_send(cfg: dict, action: dict) -> dict:
     return {"ok": True, "to": to, "subject": msg["Subject"]}
 
 
+def _coerce_json_body(body: Any) -> Any:
+    """Some models emit the request body as a JSON-encoded *string* instead of
+    an object/array. Detect and decode so requests doesn't double-encode."""
+    if isinstance(body, str):
+        s = body.strip()
+        if s.startswith(("{", "[")):
+            try:
+                return json.loads(s)
+            except json.JSONDecodeError:
+                return body
+    return body
+
+
 def exec_cf_api(cfg: dict, action: dict) -> dict:
     """Cloudflare API call. action.method, action.path (under /client/v4), action.body."""
     cf = cfg.get("cloudflare", {})
@@ -614,7 +714,7 @@ def exec_cf_api(cfg: dict, action: dict) -> dict:
         path = "/" + path
     url = f"https://api.cloudflare.com/client/v4{path}"
     headers = {"Authorization": f"Bearer {cf['token']}", "Content-Type": "application/json"}
-    body = action.get("body")
+    body = _coerce_json_body(action.get("body"))
     try:
         r = requests.request(method, url, headers=headers,
                              json=body if body is not None else None, timeout=30)
@@ -631,7 +731,7 @@ def exec_http_mutating(action: dict) -> dict:
     url = action.get("url")
     if not url:
         return {"ok": False, "error": "missing 'url'"}
-    body = action.get("body")
+    body = _coerce_json_body(action.get("body"))
     headers = action.get("headers") or {}
     kwargs: dict = {"headers": headers, "timeout": 30}
     if isinstance(body, (dict, list)):
@@ -679,12 +779,20 @@ def queue_gated_action(cfg: dict, paths: Paths, action: dict) -> dict:
     qid = f"q{int(time.time()*1000)}"
     rec = {"id": qid, "queued_at": now_iso(), "action": action}
     append_text(paths.pending / "pending_actions.jsonl", json.dumps(rec) + "\n")
+    av = compute_availability(cfg)
+    suppress = bool((cfg.get("availability") or {}).get(
+        "suppress_approval_pings_out_of_window", True))
+    silent = (not av["in_window"]) and suppress
+    summary = _gated_summary(qid, action)
+    if silent:
+        summary = "🌙 (out-of-hours · silent ping)\n" + summary
     try:
-        telegram_send(cfg, _gated_summary(qid, action),
-                      thread_id=gated_action_thread(cfg), label="gated")
+        telegram_send(cfg, summary, thread_id=gated_action_thread(cfg),
+                      label="gated", silent=silent)
     except Exception:
         pass  # never let notification failure break queueing
-    return {"ok": True, "queued": True, "id": qid, "type": action.get("type")}
+    return {"ok": True, "queued": True, "id": qid, "type": action.get("type"),
+            "silent_ping": silent}
 
 
 # ----------------- non-gated dispatcher --------------------------------
@@ -758,7 +866,8 @@ TELEGRAM_HARD_LIMIT = 4096   # Telegram sendMessage cap (chars, UTF-16 code unit
 TELEGRAM_SAFE_LIMIT = 4000   # leave headroom for emoji / multi-byte
 
 
-def telegram_send(cfg: dict, text: str, thread_id: int | None = None, label: str = "") -> dict:
+def telegram_send(cfg: dict, text: str, thread_id: int | None = None, label: str = "",
+                  silent: bool = False) -> dict:
     tok = cfg["telegram"]["bot_token"]
     chat = cfg["telegram"]["chat_id"]
     if not tok:
@@ -777,6 +886,8 @@ def telegram_send(cfg: dict, text: str, thread_id: int | None = None, label: str
     payload: dict[str, Any] = {"chat_id": chat, "text": text}
     if thread_id:
         payload["message_thread_id"] = int(thread_id)
+    if silent:
+        payload["disable_notification"] = True
     try:
         r = requests.post(url, json=payload, timeout=10)
     except requests.RequestException as e:
@@ -923,6 +1034,16 @@ def main() -> int:
         obj = extract_json(content)
         if obj is None:
             raise RuntimeError("PARSE_ERROR: no JSON object in response")
+        # work_done is mandatory. Empty/missing means the model dropped the
+        # narrative — most likely a schema-heavy tick (compaction, big rewrite)
+        # where it skipped the field. Treat as parse failure so the wrapper
+        # does NOT archive INBOX, does NOT clear the compaction flag, and we
+        # see it as a 🦫 FAIL in Telegram. Otherwise the side-effects land
+        # without Mako acknowledging anything Chris just told him.
+        wd_check = obj.get("work_done")
+        if not (isinstance(wd_check, str) and wd_check.strip()):
+            raise RuntimeError("PARSE_ERROR: work_done missing or empty — "
+                               "rejecting tick to preserve INBOX + compaction flag")
         parse_ok = True
         full_log["parsed_response"] = obj
 

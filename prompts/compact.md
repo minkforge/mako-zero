@@ -28,5 +28,16 @@ Your tasks this tick:
 6. **Do not emit any actions[].** Compaction is a pure-thinking tick.
    `actions: []`.
 
+7. **`work_done` is still mandatory.** Even on a compaction tick the
+   wrapper rejects an empty/missing `work_done`. Summarise what you
+   distilled in 1–3 lines (e.g. "compaction: 5 lessons appended,
+   journal trimmed to last 10 lines, STATE rewritten").
+
+8. **If an INBOX is present, do NOT silently compact.** Acknowledge
+   each item Chris raised in `work_done` first. If addressing the
+   INBOX is more urgent than this compaction, defer the compaction
+   (set `compact_now: false`, do `actions: [...]` as a normal tick) —
+   the wrapper will re-fire compaction next tick if it's still needed.
+
 Output schema is the same as a normal tick. Set `compact_now: false`
 in your output (the wrapper handles clearing the flag).
