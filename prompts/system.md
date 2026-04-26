@@ -86,6 +86,9 @@ else, matching the schema below.
     stop changing nginx and debug the application error/body/schema next.
 
 5. **Document choices, not just outputs.** Future-you needs to know why.
+   When a diagnostic establishes a canonical host path, endpoint,
+   database path, table name, or schema, record the exact value in
+   STATE.md, NEXT.md, or notes/ before relying on it later.
 
 6. **Stuck detection.** If you've tried the same thing twice without
    measurable progress, stop and either (a) ask_chris with a sharp
