@@ -313,7 +313,7 @@ _DENY_SUFFIXES = (".pem", ".crt", ".key", ".htpasswd")
 # Secret-shaped patterns that should never appear in a diff being pushed.
 # Conservative: catches "<keyword>: <non-empty>" and AWS/GCP key prefixes.
 _SECRET_LINE_PATTERNS = (
-    re.compile(r"^\+.*\b(api_key|bot_token|smtp_password|password|secret|access_token)\b\s*:\s*[\"']?[^\"'\s][^\"']*", re.IGNORECASE),
+    re.compile(r"^\+\s*[\"']?[\w.-]*(api_key|bot_token|smtp_password|password|secret|access_token)[\w.-]*[\"']?\s*:\s*[\"']?[^\"'\s][^\"']*", re.IGNORECASE),
     re.compile(r"^\+.*\bAKIA[0-9A-Z]{16}\b"),                   # AWS access key
     re.compile(r"^\+.*\bAIza[0-9A-Za-z_\-]{30,}\b"),            # GCP API key
     re.compile(r"^\+.*\b(sk|rk|pk)_(test|live)_[0-9a-zA-Z]{16,}\b"),  # Stripe
