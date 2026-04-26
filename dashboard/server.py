@@ -592,6 +592,145 @@ def health():
     return {"ok": True}
 
 
+# ---------------------------- /public ----------------------------------
+# Sanitised public stats page. No INBOX, no STATE/NEXT, no journal text,
+# no pending action bodies — only safe numbers + flavour. nginx exposes
+# this path without auth; everything else requires basic auth.
+
+def _public_stats() -> dict:
+    cfg = load_cfg()
+    root = paths_root()
+    state = root / "state"
+    logs = root / "logs"
+
+    try:
+        tick_n = int((state / "tick_counter.txt").read_text(encoding="utf-8").strip() or "0")
+    except OSError:
+        tick_n = 0
+
+    # journal line count (proxy for "things tried")
+    journal_lines = 0
+    journal_p = state / "JOURNAL.md"
+    if journal_p.exists():
+        journal_lines = sum(1 for L in journal_p.read_text(encoding="utf-8").splitlines() if L.strip())
+
+    # MTD spend — read from STATE.md if present, else 0
+    mtd_pence = 0
+    state_md_p = state / "STATE.md"
+    if state_md_p.exists():
+        import re
+        text = state_md_p.read_text(encoding="utf-8")
+        m = re.search(r"MTD\s+spend:?\s*£?\s*([\d.]+)", text, re.IGNORECASE)
+        if m:
+            try:
+                mtd_pence = int(float(m.group(1)) * 100)
+            except ValueError:
+                pass
+    ceiling_pence = int(cfg.get("tick", {}).get("budget_ceiling_pence_month", 10000))
+
+    # days alive — earliest journal line timestamp, or first metrics row
+    days_alive = 0
+    try:
+        m = logs / "metrics.csv"
+        if m.exists():
+            with m.open("r", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+            if rows:
+                first_ts = rows[0].get("ts", "")
+                if first_ts:
+                    started = datetime.fromisoformat(first_ts.replace("Z", "+00:00"))
+                    days_alive = max(0, (datetime.now(timezone.utc) - started).days)
+    except Exception:
+        days_alive = 0
+
+    metrics = _metric_stats(logs)
+
+    # blog drafts published (count files in published/, falls back to drafts/)
+    blog_dir = state / "outbox" / "blog"
+    drafts_n = len(list((blog_dir / "drafts").glob("*.md"))) if (blog_dir / "drafts").exists() else 0
+    published_n = len(list((blog_dir / "published").glob("*.md"))) if (blog_dir / "published").exists() else 0
+
+    return {
+        "tick_n": tick_n,
+        "journal_lines": journal_lines,
+        "days_alive": days_alive,
+        "mtd_pence": mtd_pence,
+        "mtd_ceiling_pence": ceiling_pence,
+        "wall_avg_s": metrics.get("wall_avg", 0),
+        "parse_pct": metrics.get("parse_pct", 0),
+        "drafts_n": drafts_n,
+        "published_n": published_n,
+        "last_tick_at": metrics.get("last_ts", ""),
+    }
+
+
+@app.get("/api/public.json")
+def public_json():
+    return JSONResponse(_public_stats())
+
+
+@app.get("/public", response_class=HTMLResponse)
+def public_page():
+    s = _public_stats()
+    mtd_pct = round(100 * s["mtd_pence"] / max(1, s["mtd_ceiling_pence"]), 1)
+    body = f"""<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mako · live</title>
+<style>{CSS}
+.hero {{ text-align: center; padding: 40px 16px; }}
+.hero h1 {{ font-size: 32px; letter-spacing: 0.04em; margin: 0 0 8px 0; color: #fff; }}
+.hero .sub {{ color: var(--mute); font-size: 13px; max-width: 580px; margin: 0 auto; line-height: 1.6; }}
+.stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; max-width: 900px; margin: 32px auto; padding: 0 16px; }}
+.stat {{ border: 1px solid var(--b); border-radius: 2px; padding: 16px 12px; text-align: center; background: #0e0e0e; }}
+.stat .num {{ font-size: 28px; color: #fff; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }}
+.stat .label {{ font-size: 10px; color: var(--mute); text-transform: uppercase; letter-spacing: 0.1em; margin-top: 4px; }}
+.budget-bar {{ height: 4px; background: var(--b); border-radius: 2px; margin-top: 8px; overflow: hidden; }}
+.budget-fill {{ height: 100%; background: var(--green); width: {mtd_pct}%; transition: width 0.5s; }}
+.foot {{ text-align: center; color: var(--mute); padding: 24px; font-size: 11px; }}
+.foot a {{ color: var(--mute); }}
+</style>
+</head><body>
+<div class="hero">
+  <h1>🦫 mako</h1>
+  <div class="sub">An AI agent trying to make £100/month online — building, journaling, and failing in public. Runs on a single VPS, ticks every few minutes, documents everything.</div>
+</div>
+<div class="stats" hx-get="/api/public/stats-fragment" hx-trigger="every 30s" hx-swap="innerHTML">
+  <div class="stat"><div class="num">{s["tick_n"]:,}</div><div class="label">ticks</div></div>
+  <div class="stat"><div class="num">{s["days_alive"]}</div><div class="label">days alive</div></div>
+  <div class="stat"><div class="num">£{s["mtd_pence"]/100:.2f}</div><div class="label">spent · £{s["mtd_ceiling_pence"]/100:.0f} ceiling</div><div class="budget-bar"><div class="budget-fill"></div></div></div>
+  <div class="stat"><div class="num">{s["journal_lines"]:,}</div><div class="label">journal lines</div></div>
+  <div class="stat"><div class="num">{s["drafts_n"]}</div><div class="label">blog drafts</div></div>
+  <div class="stat"><div class="num">{s["published_n"]}</div><div class="label">published</div></div>
+  <div class="stat"><div class="num">{s["wall_avg_s"]}s</div><div class="label">avg tick wall</div></div>
+  <div class="stat"><div class="num">{s["parse_pct"]}%</div><div class="label">parse rate</div></div>
+</div>
+<div class="foot">
+  last tick · {s["last_tick_at"] or "—"}<br>
+  source: <a href="https://github.com/minkforge/mako-zero">github.com/minkforge/mako-zero</a>
+</div>
+<script src="https://unpkg.com/htmx.org@1.9.10"></script>
+</body></html>"""
+    return HTMLResponse(body)
+
+
+@app.get("/api/public/stats-fragment", response_class=HTMLResponse)
+def public_stats_fragment():
+    s = _public_stats()
+    mtd_pct = round(100 * s["mtd_pence"] / max(1, s["mtd_ceiling_pence"]), 1)
+    return HTMLResponse(f"""
+  <div class="stat"><div class="num">{s["tick_n"]:,}</div><div class="label">ticks</div></div>
+  <div class="stat"><div class="num">{s["days_alive"]}</div><div class="label">days alive</div></div>
+  <div class="stat"><div class="num">£{s["mtd_pence"]/100:.2f}</div><div class="label">spent · £{s["mtd_ceiling_pence"]/100:.0f} ceiling</div><div class="budget-bar"><div class="budget-fill" style="width:{mtd_pct}%"></div></div></div>
+  <div class="stat"><div class="num">{s["journal_lines"]:,}</div><div class="label">journal lines</div></div>
+  <div class="stat"><div class="num">{s["drafts_n"]}</div><div class="label">blog drafts</div></div>
+  <div class="stat"><div class="num">{s["published_n"]}</div><div class="label">published</div></div>
+  <div class="stat"><div class="num">{s["wall_avg_s"]}s</div><div class="label">avg tick wall</div></div>
+  <div class="stat"><div class="num">{s["parse_pct"]}%</div><div class="label">parse rate</div></div>
+""")
+
+
 if __name__ == "__main__":
     import uvicorn
     host = os.environ.get("MAKO_DASH_HOST", "127.0.0.1")
