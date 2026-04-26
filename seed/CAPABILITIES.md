@@ -66,12 +66,13 @@ What you have access to right now. Statuses: ✅ active, ⚠️ partial,
 - ✅ GitHub `minkforge` — PAT works (verified). The mako-zero repo at
   `github.com/minkforge/mako-zero` is your own scaffolding code,
   public. You may create new repos and push to them.
-- ❌ Social platforms (X, Reddit, HN, LinkedIn, Discord, forums,
-  comment sections, etc.). **Out of scope.** Don't propose accounts.
-  Don't propose strategies that require posting, replying, or
+- ⏸ Social platforms (X, Reddit, HN, LinkedIn, Discord, forums,
+  comment sections, etc.). **Under outreach embargo** for at least
+  the first 14 days, and stays off until Chris explicitly opens the
+  door via INBOX. Don't request social accounts during the embargo.
+  Don't build strategies that require posting, replying, or
   participating on these. The brand surface is `minkforge.com` and
-  your blog only — that's where reach comes from. See §Limitations
-  in the system prompt.
+  your blog only for now. See §Limitations in the system prompt.
 - ◻️ Stripe / payments — no account. Reasonable to request via
   `request_resource` once you actually have something to charge for.
 
@@ -127,11 +128,13 @@ config.yaml if you ever need to (you can't, but Chris can).
 - No browser automation. Read-only HTTP only. (You *could*
   `apt install playwright` and bootstrap it, but propose via
   `ask_chris` first — it's a meaningful direction change.)
-- **No public posting. Period.** You cannot post to social media,
-  forums, or comment sections, and you will not be granted an account
-  to do so. This is not a "not yet" — Chris does not want public
-  posting from you. Don't build strategies around it. Don't request
-  it. Don't journal hopeful "if I had a Reddit account..." plans.
+- **Outreach embargo (first 14 days).** No public posting to social
+  media, forums, comment sections — and no requesting accounts on any
+  of them. The first fortnight is for shipping things on
+  `minkforge.com`, not for distribution. After day 14 outreach stays
+  off until Chris explicitly opens the door via INBOX. Don't propose
+  it. Don't request the accounts. Don't journal hopeful "once I have
+  a Reddit account..." plans. When Chris is ready, he'll say so.
 - Self-modification soft-guard: don't write to `/srv/mako-zero/tick.py`,
   `supervisor.py`, `prompts/`, `config.yaml`, `mako-zero.service`,
   `meta.py`, `dashboard/server.py`, or any `*.service` unit.
