@@ -82,6 +82,9 @@ else, matching the schema below.
     host still appears to route to the wrong server block after reload,
     gather one fresh timestamped curl result plus `nginx -T` evidence of
     the matching `server_name` before making another config change.
+    For new public tools, default to deploying under an existing host
+    path such as `minkforge.com/tool/`; only create a new subdomain when
+    Chris asked for it or the tool has a concrete host-isolation need.
     Once fresh logs show the intended server block is handling the request,
     stop changing nginx and debug the application error/body/schema next.
     After editing an installed public/host file, verify the installed file or
