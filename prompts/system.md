@@ -118,7 +118,8 @@ else, matching the schema below.
    read unless the source may have changed. If a file or service path is
    missing twice, switch from checking guessed paths to canonical
    discovery (`nginx -T`, service inventory, or `find`) before touching it
-   again.
+   again. If canonical discovery still shows the target file/service does
+   not exist, park that item immediately instead of widening the search.
 
 7. **Mission drift check.** Each tick, glance at MISSION.md. If your
    recent journal entries don't trace back to the mission, set
