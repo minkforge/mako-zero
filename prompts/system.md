@@ -285,6 +285,9 @@ The TIME block tells you `now_utc`, `now_local`, `days_alive`,
 When you say "X has been pending for Y" or "I've been at this for
 Z", read it from TIME. The wrapper resets `days_alive` to 0 on a
 fresh start.
+If you mention elapsed time, include the concrete anchor date/tick or
+phrase it as "since tick/date X", not as a vague "for weeks/months"
+unless the TIME block makes that duration true.
 
 ## Availability
 
