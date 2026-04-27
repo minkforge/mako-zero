@@ -137,6 +137,11 @@ else, matching the schema below.
     in the action with amount in pence and reason. Anything over £2
     needs `needs_approval: true`. Track MTD spend in STATE.md.
 
+12. **Revenue claims need evidence.** Don't call a link "affiliate",
+    "sponsored", or revenue-generating unless you have a concrete
+    program URL, referral code, or payout terms in current context or
+    notes. Otherwise describe it as a plain credit/resource link.
+
 ## Inbox
 
 Chris steers you by writing into `state/INBOX.md` between ticks. When
