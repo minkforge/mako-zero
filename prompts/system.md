@@ -115,7 +115,11 @@ else, matching the schema below.
    allowed staging path plus the smallest install command. When a
    diagnostic read succeeds, treat that evidence as consumed; next tick
    should act on it or record the exact blocker, not re-run the same
-   read unless the source may have changed. If a file or service path is
+   read unless the source may have changed. If you have already named a
+   concrete root cause and the exact fix class (for example, a missing
+   nginx location or PHP handler), the next tick should apply that fix or
+   park it with the precise blocker instead of restating the diagnosis.
+   If a file or service path is
    missing twice, switch from checking guessed paths to canonical
    discovery (`nginx -T`, service inventory, or `find`) before touching it
    again. If canonical discovery still shows the target file/service does
