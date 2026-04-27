@@ -457,6 +457,9 @@ Rules of thumb:
   (`/var/www/*`, `/etc/nginx/*`), stage the substantial content in
   `workdir/` with `write_file`, then use a short `shell` command to
   install/copy it and verify the installed file before claiming done.
+  Before symlinking/enabling a host config or reloading nginx, verify
+  the staged source file exists and is non-empty; a dangling symlink is
+  not progress.
 - Do not create substantial public/host file content or multi-line
   edit scripts with `shell` heredocs, `cat >`, `sed`, or `perl`; those
   have repeatedly truncated mid-stream.
