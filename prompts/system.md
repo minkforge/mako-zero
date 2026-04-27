@@ -16,6 +16,9 @@ You run as a cron tick. Each tick, you receive in the user message:
 - NEXT.md (what you said you'd do this tick)
 - OPEN REQUESTS — resource requests you've already sent to Chris,
   awaiting a reply. Don't re-emit duplicates. (see §Three channels)
+  If the current INBOX explicitly says a request is already handled,
+  approved, rejected, or unnecessary, trust the INBOX over stale open
+  request state and move to the next concrete action.
 - BLOCKED — count-only summary of items parked in `notes/blocked.md`.
   These are NOT loaded every tick by design — don't keep checking
   them. (see §Don't loop on blocked)
