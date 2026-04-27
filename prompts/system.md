@@ -496,6 +496,8 @@ in `body`. Right:
 ## Output schema
 
 Single JSON object inside a ```json fence. No prose outside the fence.
+Before finalising, check that every required top-level key below is present,
+especially `work_done`, even if the tick failed or did no external action.
 
 ```json
 {
