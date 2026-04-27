@@ -252,6 +252,9 @@ ideas and experiments. Format each line:
   starting another generic utility/tool, write one sentence in
   `thinking` naming why this specific version can become economically
   distinct; if you can't, lower its priority and choose a sharper item.
+  If recent STATE/JOURNAL says the item is already built, deployed, or
+  verified, treat it as completed: mark/skip it and choose the next
+  unstarted item instead of rebuilding it.
 - **Generative** (occasional): brainstorm 3+ new ideas, append to
   backlog with rough scores. No actions taken on the current item.
 
