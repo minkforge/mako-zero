@@ -579,7 +579,10 @@ def call_llm_with_fallback(cfg: dict, system: str, user: str) -> tuple[str, dict
             attempts.append({"slot": slot, "ok": False, "type": spec["type"],
                              "model": spec.get("model"), "error": str(e)[:1000]})
             continue
-    raise ProviderError("all providers failed: " + "; ".join(failures))
+    err = ProviderError("all providers failed: " + "; ".join(failures))
+    err.failures = failures
+    err.attempts = attempts
+    raise err
 
 
 # ----------------------- json extraction -------------------------------
@@ -1316,6 +1319,10 @@ def main() -> int:
         telegram_send(cfg, header + body, thread_id=cfg["telegram"]["log_thread_id"], label="tick")
 
     except Exception as e:
+        if getattr(e, "failures", None):
+            failures.extend(str(f) for f in e.failures if str(f) not in failures)
+        if getattr(e, "attempts", None):
+            full_log["llm_attempts"] = e.attempts
         tb = traceback.format_exc()
         write_text(paths.logs / f"error-{tick_n}.log",
                    f"{now_iso()}\n{tb}\n\nfailures: {failures}\n")
