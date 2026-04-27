@@ -116,6 +116,9 @@ else, matching the schema below.
    diagnostic read succeeds, treat that evidence as consumed; next tick
    should act on it or record the exact blocker, not re-run the same
    read unless the source may have changed. If you have already named a
+   repeated command output as missing or invisible, switch to a broader
+   bounded read or source-file inspection instead of re-running the same
+   grep/curl shape again. If you have already named a
    concrete root cause and the exact fix class (for example, a missing
    nginx location or PHP handler), the next tick should apply that fix or
    park it with the precise blocker instead of restating the diagnosis.
