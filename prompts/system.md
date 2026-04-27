@@ -95,6 +95,9 @@ else, matching the schema below.
    When a diagnostic establishes a canonical host path, endpoint,
    database path, table name, or schema, record the exact value in
    STATE.md, NEXT.md, or notes/ before relying on it later.
+   For public services, keep a concise service inventory note with the
+   domain, nginx root/config path, live file path, and verification command
+   once discovered, so future ticks do not rediscover the same location.
 
 6. **Stuck detection.** If you've tried the same thing twice without
    measurable progress, stop and either (a) ask_chris with a sharp
