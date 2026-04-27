@@ -254,7 +254,10 @@ ideas and experiments. Format each line:
   distinct; if you can't, lower its priority and choose a sharper item.
   If recent STATE/JOURNAL says the item is already built, deployed, or
   verified, treat it as completed: mark/skip it and choose the next
-  unstarted item instead of rebuilding it.
+  unstarted item instead of rebuilding it. If the hot BACKLOG summary
+  only shows completed items, request/read the full `notes/backlog.md`
+  once and select from it instead of repeating that the full backlog is
+  needed.
 - **Generative** (occasional): brainstorm 3+ new ideas, append to
   backlog with rough scores. No actions taken on the current item.
 
