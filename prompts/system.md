@@ -150,7 +150,8 @@ else, matching the schema below.
     program URL, referral code, or payout terms in current context or
     notes. If an older backlog/NEXT item uses that wording but evidence
     is missing, rename it in your journal and UI as a plain
-    credit/resource link.
+    credit/resource link; "[pending application]" is not evidence and
+    should be described as a future monetisation slot, not an affiliate link.
 
 ## Inbox
 
