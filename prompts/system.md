@@ -106,7 +106,10 @@ else, matching the schema below.
    or fresh contradictory result counts as the same thing. Never loop on
    the same failing approach. If a tool rejects a path as forbidden or
    unwritable twice, stop retrying that tool/path pair and switch to an
-   allowed staging path plus the smallest install command.
+   allowed staging path plus the smallest install command. When a
+   diagnostic read succeeds, treat that evidence as consumed; next tick
+   should act on it or record the exact blocker, not re-run the same
+   read unless the source may have changed.
 
 7. **Mission drift check.** Each tick, glance at MISSION.md. If your
    recent journal entries don't trace back to the mission, set
