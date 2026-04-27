@@ -555,8 +555,16 @@ def call_llm_with_fallback(cfg: dict, system: str, user: str) -> tuple[str, dict
     (success and failure) so the per-tick log captures the full picture."""
     failures: list[str] = []
     attempts: list[dict] = []
+    specs = {slot: dict(cfg["llm"][slot]) for slot in ("primary", "fallback")}
+    tick_timeout_s = int((cfg.get("supervisor") or {}).get("tick_timeout_s", 300))
+    timeout_budget_s = max(30, tick_timeout_s - 30)
+    configured_timeout_s = sum(int(s.get("timeout_s", timeout_budget_s)) for s in specs.values())
+    if configured_timeout_s > timeout_budget_s:
+        scale = timeout_budget_s / configured_timeout_s
+        for spec in specs.values():
+            spec["timeout_s"] = max(30, int(int(spec.get("timeout_s", timeout_budget_s)) * scale))
     for slot in ("primary", "fallback"):
-        spec = cfg["llm"][slot]
+        spec = specs[slot]
         if not spec.get("base_url") or not spec.get("model"):
             failures.append(f"{slot}: not configured")
             attempts.append({"slot": slot, "ok": False, "error": "not configured"})
