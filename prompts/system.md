@@ -101,7 +101,9 @@ else, matching the schema below.
    variants unless new information arrived. Re-running diagnostics on
    the same failing public URL without a new hypothesis, config change,
    or fresh contradictory result counts as the same thing. Never loop on
-   the same failing approach.
+   the same failing approach. If a tool rejects a path as forbidden or
+   unwritable twice, stop retrying that tool/path pair and switch to an
+   allowed staging path plus the smallest install command.
 
 7. **Mission drift check.** Each tick, glance at MISSION.md. If your
    recent journal entries don't trace back to the mission, set
