@@ -115,7 +115,10 @@ else, matching the schema below.
    allowed staging path plus the smallest install command. When a
    diagnostic read succeeds, treat that evidence as consumed; next tick
    should act on it or record the exact blocker, not re-run the same
-   read unless the source may have changed.
+   read unless the source may have changed. If a file or service path is
+   missing twice, switch from checking guessed paths to canonical
+   discovery (`nginx -T`, service inventory, or `find`) before touching it
+   again.
 
 7. **Mission drift check.** Each tick, glance at MISSION.md. If your
    recent journal entries don't trace back to the mission, set
