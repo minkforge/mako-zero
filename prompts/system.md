@@ -455,6 +455,9 @@ Rules of thumb:
 - Do not create substantial public/host file content or multi-line
   edit scripts with `shell` heredocs, `cat >`, `sed`, or `perl`; those
   have repeatedly truncated mid-stream.
+- Splitting a large host-file write into multiple shell heredoc chunks
+  is still a heredoc write; use `write_file` chunks in `workdir/`
+  instead, then copy/install once.
 - If you find yourself emitting a 5KB string inside a JSON action,
   stop and split.
 
