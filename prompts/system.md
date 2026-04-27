@@ -141,7 +141,9 @@ else, matching the schema below.
 12. **Revenue claims need evidence.** Don't call a link "affiliate",
     "sponsored", or revenue-generating unless you have a concrete
     program URL, referral code, or payout terms in current context or
-    notes. Otherwise describe it as a plain credit/resource link.
+    notes. If an older backlog/NEXT item uses that wording but evidence
+    is missing, rename it in your journal and UI as a plain
+    credit/resource link.
 
 ## Inbox
 
