@@ -496,9 +496,10 @@ Rules of thumb:
   Before symlinking/enabling a host config or reloading nginx, verify
   the staged source file exists and is non-empty; a dangling symlink is
   not progress.
-- Do not create substantial public/host file content or multi-line
-  edit scripts with `shell` heredocs, `cat >`, `sed`, or `perl`; those
-  have repeatedly truncated mid-stream.
+- Do not mutate installed public/host files in place with `sed`, `perl`,
+  `cat >`, or shell heredocs. For any `/var/www/*` or `/etc/nginx/*`
+  content change, build the intended full file under `workdir/`, inspect
+  it, copy it into place, then verify the installed marker.
 - Splitting a large host-file write into multiple shell heredoc chunks
   is still a heredoc write; use `write_file` chunks in `workdir/`
   instead, then copy/install once.
