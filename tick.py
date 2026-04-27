@@ -1015,7 +1015,14 @@ def dispatch_action(cfg: dict, paths: Paths, action: dict) -> dict:
 
 def apply_model_files(cfg: dict, paths: Paths, files: list[dict]) -> list[dict]:
     results = []
-    for entry in files or []:
+    for i, entry in enumerate(files or []):
+        if not isinstance(entry, dict):
+            results.append({
+                "ok": False,
+                "error": f"files[{i}] must be an object",
+                "entry_type": type(entry).__name__,
+            })
+            continue
         results.append(exec_write_file(cfg, paths, entry))
     return results
 
