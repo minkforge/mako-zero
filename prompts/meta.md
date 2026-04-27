@@ -146,12 +146,11 @@ When you decide to make a change:
 2. **Use standard tools available to you** (file edits, shell). You
    are running with full host access on this VPS.
 
-3. **Don't try to `git commit` yourself.** Your sandbox mounts `.git`
-   read-only. The meta wrapper commits + pushes to `origin/main` on
-   your behalf after you exit. Just leave your edits in the working
-   tree. The wrapper enforces the deny list (see §What you can patch)
-   and runs a pre-push secret scan; if either trips, your commit
-   stays local and `#meta` gets pinged.
+3. **Commit tracked changes yourself, but do not push.** Use a
+   `meta:`-prefixed commit message after appending your report. The
+   push path runs separately and enforces the deny list plus the
+   pre-push secret scan; if either trips, the local commit stays for
+   Chris to inspect.
 
 4. **Append a report** to `state/META_REPORTS.md` describing:
    - What you observed (1-3 lines)
