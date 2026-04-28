@@ -1223,13 +1223,21 @@ def run_tool_loop(cfg: dict, paths: Paths, system: str, user_msg: str,
     response), we synthesise a minimal payload from the last assistant content
     so the wrapper can still journal something."""
     tl = cfg.get("tool_loop") or {}
-    max_iter = int(tl.get("max_iterations", 8))
+    max_iter = int(tl.get("max_iterations", 12))
     soft_deadline_s = float(tl.get("soft_deadline_s", 240))
 
     tools = tool_definitions()
+    # Tell the model up front how the tool budget works — gpt-oss won't call
+    # finish on its own otherwise; it'll happily keep investigating.
+    user_msg_with_budget = (
+        f"You have up to {max_iter} tool-call rounds this tick before the wrapper forces "
+        f"a finish. Most ticks should wrap up in 3-6 rounds. As soon as you have a "
+        f"concrete hypothesis or fix to journal, call the `finish` tool — don't keep "
+        f"investigating past the point of useful action.\n\n---\n\n" + user_msg
+    )
     messages: list[dict] = [
         {"role": "system", "content": system},
-        {"role": "user", "content": user_msg},
+        {"role": "user", "content": user_msg_with_budget},
     ]
     full_log["llm_attempts"] = []
     full_log["tool_calls"] = []
@@ -1237,15 +1245,24 @@ def run_tool_loop(cfg: dict, paths: Paths, system: str, user_msg: str,
     last_msg: dict = {}
 
     for step in range(max_iter):
-        # Soft deadline: if we're past the budget, nudge the model to wrap up
-        # (the model still has one more LLM round-trip to call finish).
-        elapsed = time.time() - tick_started_at
-        if elapsed > soft_deadline_s:
+        steps_remaining = max_iter - step  # current step is included
+        # Hard nudge on the second-to-last iteration: the model MUST finish on
+        # the next response, period.
+        if steps_remaining <= 2:
             messages.append({
                 "role": "user",
-                "content": (f"⚠️ Soft deadline hit ({int(elapsed)}s elapsed). "
-                            f"Call the `finish` tool now with whatever progress you have. "
-                            f"Don't start any more shell/http work this tick.")
+                "content": (f"⚠️ Only {steps_remaining} tool-call round(s) remaining. "
+                            f"Stop investigating. Call the `finish` tool on this response "
+                            f"with work_done summarising what you found and what NEXT.md "
+                            f"should be. Don't start any more shell/http work — the wrapper "
+                            f"will synthesise a payload from your last content if you don't "
+                            f"call finish, which is worse than your honest summary now.")
+            })
+        elif (time.time() - tick_started_at) > soft_deadline_s:
+            messages.append({
+                "role": "user",
+                "content": (f"⚠️ Soft deadline hit ({int(time.time() - tick_started_at)}s elapsed). "
+                            f"Wrap up in the next 1-2 calls — call finish soon.")
             })
 
         msg, meta, _failures, attempts_round = call_chat_with_fallback(cfg, messages, tools)

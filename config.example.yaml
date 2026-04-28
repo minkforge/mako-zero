@@ -56,8 +56,8 @@ tick:
 # model calls the `finish` tool (or content with no tool_calls) or hits the
 # iteration cap.
 tool_loop:
-  max_iterations: 8           # hard cap on LLM round-trips per tick
-  soft_deadline_s: 240        # if elapsed > this, force the model to finish next call
+  max_iterations: 12          # hard cap on LLM round-trips per tick (3-6 is typical)
+  soft_deadline_s: 300        # if elapsed > this, ask the model to wrap up soon
   loop_detect_recent: 5       # compare new work_done against last N journal entries
   loop_detect_ratio: 0.6      # SequenceMatcher ratio threshold — 0.6 = "very similar"
   loop_detect_count: 3        # if N+ recent entries are similar → flag + force generative
