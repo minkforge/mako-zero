@@ -366,23 +366,28 @@ def _redact(headers: dict) -> dict:
     return out
 
 
-def call_ollama(spec: dict, system: str, user: str) -> tuple[str, dict]:
+def call_ollama_chat(spec: dict, messages: list[dict], tools: list[dict] | None = None) -> tuple[dict, dict]:
+    """Call Ollama Cloud /api/chat with a full messages list and optional tools.
+
+    Returns (assistant_message, meta). assistant_message is the full message
+    dict from the response (role/content/thinking/tool_calls). For
+    backward-compat with single-shot callers, callers can pull .content out
+    of the returned message; tool callers should look at .tool_calls."""
     base = spec["base_url"].rstrip("/")
     url = f"{base}/api/chat"
     headers = {"Content-Type": "application/json"}
     if spec.get("api_key"):
         headers["Authorization"] = f"Bearer {spec['api_key']}"
-    body = {
+    body: dict = {
         "model": spec["model"],
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
+        "messages": messages,
         "stream": False,
         "options": {
             "num_predict": spec.get("num_predict", 8000),
         },
     }
+    if tools:
+        body["tools"] = tools
     t0 = time.time()
     r = requests.post(url, headers=headers, json=body, timeout=spec["timeout_s"])
     dt = time.time() - t0
@@ -396,9 +401,12 @@ def call_ollama(spec: dict, system: str, user: str) -> tuple[str, dict]:
         data = r.json()
     except ValueError:
         raise ProviderError(f"ollama non-JSON response: {raw_text[:300]}")
-    content = (data.get("message") or {}).get("content")
-    if not content:
-        raise ProviderError(f"ollama empty content: {str(data)[:300]}")
+    msg = data.get("message") or {}
+    # Either content or tool_calls must be present.
+    has_content = bool((msg.get("content") or "").strip())
+    has_tools = bool(msg.get("tool_calls"))
+    if not has_content and not has_tools:
+        raise ProviderError(f"ollama empty message: {str(data)[:300]}")
     meta = {
         "provider": "ollama",
         "model": spec["model"],
@@ -411,24 +419,25 @@ def call_ollama(spec: dict, system: str, user: str) -> tuple[str, dict]:
         "prompt_eval_count": data.get("prompt_eval_count"),
         "eval_count": data.get("eval_count"),
     }
-    return content, meta
+    return msg, meta
 
 
-def call_openai_compat(spec: dict, system: str, user: str) -> tuple[str, dict]:
+def call_openai_compat_chat(spec: dict, messages: list[dict], tools: list[dict] | None = None) -> tuple[dict, dict]:
+    """OpenAI-compatible chat. Used by scribe / digest fallback paths only —
+    the worker tick uses Ollama with native tool calls."""
     base = spec["base_url"].rstrip("/")
     url = f"{base}/chat/completions"
     headers = {"Content-Type": "application/json"}
     if spec.get("api_key"):
         headers["Authorization"] = f"Bearer {spec['api_key']}"
-    body = {
+    body: dict = {
         "model": spec["model"],
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
+        "messages": messages,
         "max_tokens": spec.get("num_predict", 6000),
         "stream": False,
     }
+    if tools:
+        body["tools"] = tools
     t0 = time.time()
     r = requests.post(url, headers=headers, json=body, timeout=spec["timeout_s"])
     dt = time.time() - t0
@@ -440,11 +449,13 @@ def call_openai_compat(spec: dict, system: str, user: str) -> tuple[str, dict]:
     except ValueError:
         raise ProviderError(f"openai_compat non-JSON response: {raw_text[:300]}")
     try:
-        content = data["choices"][0]["message"]["content"]
+        msg = data["choices"][0]["message"]
     except (KeyError, IndexError, TypeError):
         raise ProviderError(f"openai_compat malformed: {str(data)[:300]}")
-    if not content:
-        raise ProviderError("openai_compat empty content")
+    has_content = bool((msg.get("content") or "").strip())
+    has_tools = bool(msg.get("tool_calls"))
+    if not has_content and not has_tools:
+        raise ProviderError("openai_compat empty message")
     meta = {
         "provider": "openai_compat",
         "model": spec["model"],
@@ -456,15 +467,15 @@ def call_openai_compat(spec: dict, system: str, user: str) -> tuple[str, dict]:
         "response_body": data,
         "usage": data.get("usage"),
     }
-    return content, meta
+    return msg, meta
 
 
-def call_provider(spec: dict, system: str, user: str) -> tuple[str, dict]:
+def call_provider_chat(spec: dict, messages: list[dict], tools: list[dict] | None = None) -> tuple[dict, dict]:
     t = spec["type"]
     if t == "ollama":
-        return call_ollama(spec, system, user)
+        return call_ollama_chat(spec, messages, tools)
     if t == "openai_compat":
-        return call_openai_compat(spec, system, user)
+        return call_openai_compat_chat(spec, messages, tools)
     raise ProviderError(f"unknown provider type {t}")
 
 
@@ -549,20 +560,16 @@ def compute_availability(cfg: dict) -> dict:
             "summary": summary}
 
 
-def call_llm_with_fallback(cfg: dict, system: str, user: str) -> tuple[str, dict, list[str], list[dict]]:
-    """Returns (content, meta, failure_strings, attempt_records).
-    attempt_records contains the request/response for every attempt
-    (success and failure) so the per-tick log captures the full picture."""
+def call_chat_with_fallback(cfg: dict, messages: list[dict],
+                            tools: list[dict] | None = None) -> tuple[dict, dict, list[str], list[dict]]:
+    """Run a single chat round-trip across primary → fallback.
+
+    Returns (assistant_message, meta, failure_strings, attempt_records).
+    Used by the worker tick's tool-use loop (one round per loop iteration)
+    and indirectly by scribe/digest via the legacy wrapper below."""
     failures: list[str] = []
     attempts: list[dict] = []
     specs = {slot: dict(cfg["llm"][slot]) for slot in ("primary", "fallback")}
-    tick_timeout_s = int((cfg.get("supervisor") or {}).get("tick_timeout_s", 300))
-    timeout_budget_s = max(30, tick_timeout_s - 30)
-    configured_timeout_s = sum(int(s.get("timeout_s", timeout_budget_s)) for s in specs.values())
-    if configured_timeout_s > timeout_budget_s:
-        scale = timeout_budget_s / configured_timeout_s
-        for spec in specs.values():
-            spec["timeout_s"] = max(30, int(int(spec.get("timeout_s", timeout_budget_s)) * scale))
     for slot in ("primary", "fallback"):
         spec = specs[slot]
         if not spec.get("base_url") or not spec.get("model"):
@@ -570,10 +577,10 @@ def call_llm_with_fallback(cfg: dict, system: str, user: str) -> tuple[str, dict
             attempts.append({"slot": slot, "ok": False, "error": "not configured"})
             continue
         try:
-            content, meta = call_provider(spec, system, user)
+            msg, meta = call_provider_chat(spec, messages, tools)
             meta["slot"] = slot
-            attempts.append({"slot": slot, "ok": True, "meta": meta, "content": content})
-            return content, meta, failures, attempts
+            attempts.append({"slot": slot, "ok": True, "meta": meta, "message": msg})
+            return msg, meta, failures, attempts
         except (ProviderError, requests.Timeout, requests.ConnectionError) as e:
             failures.append(f"{slot}({spec['type']}): {e}")
             attempts.append({"slot": slot, "ok": False, "type": spec["type"],
@@ -583,6 +590,20 @@ def call_llm_with_fallback(cfg: dict, system: str, user: str) -> tuple[str, dict
     err.failures = failures
     err.attempts = attempts
     raise err
+
+
+def call_llm_with_fallback(cfg: dict, system: str, user: str) -> tuple[str, dict, list[str], list[dict]]:
+    """Legacy single-shot wrapper for scribe.py / digest.py / one-shot callers.
+
+    Returns (content_str, meta, failure_strings, attempt_records). Builds a
+    plain [system, user] message list with no tools."""
+    msg, meta, failures, attempts = call_chat_with_fallback(
+        cfg,
+        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        tools=None,
+    )
+    content = msg.get("content") or ""
+    return content, meta, failures, attempts
 
 
 # ----------------------- json extraction -------------------------------
@@ -1022,6 +1043,328 @@ def dispatch_action(cfg: dict, paths: Paths, action: dict) -> dict:
     return {"ok": False, "error": f"unknown action type: {t!r}"}
 
 
+# ------------------------- tool-use loop -------------------------------
+#
+# Inside a worker tick the model runs an iterative tool-use loop: it can call
+# any of the tools below, see the result, and decide the next step. This
+# replaces the old single-shot JSON-blob protocol where every action had to be
+# planned in advance. The loop terminates when the model calls the special
+# `finish` tool (which carries the final structured payload) or when the
+# iteration cap / soft deadline forces a wrap-up.
+
+def tool_definitions() -> list[dict]:
+    """Static tool schemas exposed to the model. Add a tool here AND wire it
+    in `execute_tool_call` below — the two must stay in sync."""
+    return [
+        {"type": "function", "function": {
+            "name": "shell",
+            "description": "Run a shell command in workdir/. 30s timeout. Output truncated to 4KB. Denylist blocks the obviously catastrophic.",
+            "parameters": {"type": "object", "properties": {
+                "cmd": {"type": "string", "description": "Shell command to run"}
+            }, "required": ["cmd"]}
+        }},
+        {"type": "function", "function": {
+            "name": "read_file",
+            "description": "Read a file under /srv/mako-zero/. Body truncated to 8KB.",
+            "parameters": {"type": "object", "properties": {
+                "path": {"type": "string", "description": "Path under /srv/mako-zero/"}
+            }, "required": ["path"]}
+        }},
+        {"type": "function", "function": {
+            "name": "write_file",
+            "description": "Write or append to a file under state/, notes/, workdir/, archive/, or pending/. Other paths rejected.",
+            "parameters": {"type": "object", "properties": {
+                "path": {"type": "string"},
+                "content": {"type": "string"},
+                "mode": {"type": "string", "enum": ["write", "append"], "description": "default: write"}
+            }, "required": ["path", "content"]}
+        }},
+        {"type": "function", "function": {
+            "name": "http_get",
+            "description": "Read-only HTTP GET. Bare HTTP — no JS rendering. 30s timeout, response truncated to 8KB.",
+            "parameters": {"type": "object", "properties": {
+                "url": {"type": "string"}
+            }, "required": ["url"]}
+        }},
+        {"type": "function", "function": {
+            "name": "git",
+            "description": "Local git command (no push). Runs in workdir/.",
+            "parameters": {"type": "object", "properties": {
+                "cmd": {"type": "string", "description": "git args without the leading 'git'"}
+            }, "required": ["cmd"]}
+        }},
+        {"type": "function", "function": {
+            "name": "cf_api",
+            "description": "Cloudflare API call for minkforge.com. Free + non-gated. method/path/body.",
+            "parameters": {"type": "object", "properties": {
+                "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
+                "path": {"type": "string", "description": "Path under /client/v4, e.g. /zones/.../dns_records"},
+                "body": {"description": "Request body (object or null)"}
+            }, "required": ["method", "path"]}
+        }},
+        {"type": "function", "function": {
+            "name": "telegram_post",
+            "description": "Post a message to one of your Telegram threads. Use sparingly — the wrapper auto-posts a per-tick summary already.",
+            "parameters": {"type": "object", "properties": {
+                "thread": {"type": "string", "description": "Thread name: log/requests/approvals/digest/revenue/meta or numeric id"},
+                "text": {"type": "string"}
+            }, "required": ["text"]}
+        }},
+        {"type": "function", "function": {
+            "name": "ask_chris",
+            "description": "Open question to Chris (Requests thread, multi-turn, his reply lands in INBOX next tick). Use sparingly.",
+            "parameters": {"type": "object", "properties": {
+                "text": {"type": "string"}
+            }, "required": ["text"]}
+        }},
+        {"type": "function", "function": {
+            "name": "request_resource",
+            "description": "Structured business case for a tool/account/budget you need from Chris.",
+            "parameters": {"type": "object", "properties": {
+                "category": {"type": "string", "enum": ["domain", "software", "budget", "api_key", "paid_service", "other"]},
+                "ask": {"type": "string"},
+                "rationale": {"type": "string"},
+                "business_case": {"type": "string"},
+                "alternatives_tried": {"type": "string"}
+            }, "required": ["category", "ask", "rationale"]}
+        }},
+        {"type": "function", "function": {
+            "name": "finish",
+            "description": "Terminate the tick with the final structured summary. Call exactly once at the end. work_done is mandatory and must reflect what you actually did this tick (past tense, specific).",
+            "parameters": {"type": "object", "properties": {
+                "work_done": {"type": "string", "description": "1-3 line journal entry, past tense, specific, includes failures honestly"},
+                "tick_mode": {"type": "string", "enum": ["operative", "generative"]},
+                "state_md": {"type": "string", "description": "Full rewritten STATE.md (≤1KB), includes MTD spend"},
+                "next_md": {"type": "string", "description": "Full rewritten NEXT.md (≤500B), specifies first action of next tick"},
+                "persona_update": {"type": "object", "properties": {
+                    "mode": {"type": "string", "enum": ["append", "write", "skip"]},
+                    "content": {"type": "string"}
+                }},
+                "request_notes": {"type": "array", "items": {"type": "string"}, "description": "Up to 5 notes/ files to load into hot context next tick"},
+                "telegram": {"type": "string", "description": "≤1000 char log thread post for this tick (200-500 ideal)"},
+                "compact_now": {"type": "boolean"},
+                "drift_flag": {"type": "string", "description": "Short note if you've drifted from MISSION.md, else omit"},
+                "gated_actions": {"type": "array", "description": "Approval-gated actions to queue (email_send, http_post|put|delete, spend>£2). Each item has type and the type's args plus needs_approval:true.",
+                                  "items": {"type": "object"}}
+            }, "required": ["work_done"]}
+        }},
+    ]
+
+
+def execute_tool_call(cfg: dict, paths: Paths, name: str, args: dict) -> dict:
+    """Dispatch a single tool call. The `finish` tool is handled in
+    run_tool_loop, not here."""
+    if name == "shell":
+        return exec_shell(cfg, paths, {"cmd": args.get("cmd", "")})
+    if name == "read_file":
+        return exec_read_file(cfg, paths, {"path": args.get("path", "")})
+    if name == "write_file":
+        return exec_write_file(cfg, paths, {
+            "path": args.get("path", ""),
+            "content": args.get("content", ""),
+            "mode": args.get("mode", "write"),
+        })
+    if name == "http_get":
+        return exec_http_get(cfg, {"url": args.get("url", "")})
+    if name == "git":
+        return exec_git(cfg, paths, {"cmd": args.get("cmd", "")})
+    if name == "cf_api":
+        return exec_cf_api(cfg, {
+            "method": args.get("method", "GET"),
+            "path": args.get("path", "/"),
+            "body": args.get("body"),
+        })
+    if name == "telegram_post":
+        return exec_telegram_post(cfg, {
+            "thread": args.get("thread"),
+            "text": args.get("text", ""),
+        })
+    if name == "ask_chris":
+        return exec_ask_chris(cfg, {"text": args.get("text", "")})
+    if name == "request_resource":
+        return queue_resource_request(cfg, paths, {
+            "type": "request_resource",
+            "category": args.get("category", "other"),
+            "ask": args.get("ask", ""),
+            "rationale": args.get("rationale", ""),
+            "business_case": args.get("business_case", ""),
+            "alternatives_tried": args.get("alternatives_tried", ""),
+        })
+    return {"ok": False, "error": f"unknown tool: {name!r}"}
+
+
+def _truncate_tool_result(result: dict, max_bytes: int = 8000) -> str:
+    """Serialise a tool result for the model, capped to keep context bounded."""
+    s = json.dumps(result, ensure_ascii=False)
+    if len(s.encode("utf-8")) <= max_bytes:
+        return s
+    return s[:max_bytes] + f" …[truncated, full result was {len(s)} chars]"
+
+
+def _coerce_args(raw: Any) -> dict:
+    """Tool-call arguments arrive as a dict (Ollama native) or a JSON-encoded
+    string (some openai-compat backends). Normalise to dict."""
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def run_tool_loop(cfg: dict, paths: Paths, system: str, user_msg: str,
+                  full_log: dict, tick_started_at: float) -> tuple[dict, dict, list[dict]]:
+    """Drive the in-tick tool-use loop. Returns (final_payload, last_meta, attempts).
+
+    `final_payload` is the args dict from the model's `finish` tool call. If
+    the model never calls finish (loop cap / deadline / explicit content-only
+    response), we synthesise a minimal payload from the last assistant content
+    so the wrapper can still journal something."""
+    tl = cfg.get("tool_loop") or {}
+    max_iter = int(tl.get("max_iterations", 8))
+    soft_deadline_s = float(tl.get("soft_deadline_s", 240))
+
+    tools = tool_definitions()
+    messages: list[dict] = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user_msg},
+    ]
+    full_log["llm_attempts"] = []
+    full_log["tool_calls"] = []
+    last_meta: dict = {}
+    last_msg: dict = {}
+
+    for step in range(max_iter):
+        # Soft deadline: if we're past the budget, nudge the model to wrap up
+        # (the model still has one more LLM round-trip to call finish).
+        elapsed = time.time() - tick_started_at
+        if elapsed > soft_deadline_s:
+            messages.append({
+                "role": "user",
+                "content": (f"⚠️ Soft deadline hit ({int(elapsed)}s elapsed). "
+                            f"Call the `finish` tool now with whatever progress you have. "
+                            f"Don't start any more shell/http work this tick.")
+            })
+
+        msg, meta, _failures, attempts_round = call_chat_with_fallback(cfg, messages, tools)
+        full_log["llm_attempts"].extend(attempts_round)
+        last_meta = meta
+        last_msg = msg
+
+        # Persist the assistant turn into the conversation. Strip any thinking
+        # field — Ollama's tool calls already encode the decision.
+        assistant_turn: dict = {"role": "assistant"}
+        if msg.get("content"):
+            assistant_turn["content"] = msg["content"]
+        if msg.get("tool_calls"):
+            assistant_turn["tool_calls"] = msg["tool_calls"]
+        messages.append(assistant_turn)
+
+        tool_calls = msg.get("tool_calls") or []
+        if not tool_calls:
+            # Model returned content with no tool calls. Treat as implicit finish:
+            # try to extract JSON from content; if absent, synthesise.
+            content = (msg.get("content") or "").strip()
+            obj = extract_json(content) if content else None
+            if obj and obj.get("work_done"):
+                full_log["tool_calls"].append({"name": "<implicit_finish>", "args": obj, "result": {"ok": True}})
+                return obj, last_meta, full_log["llm_attempts"]
+            # Force one more round explicitly demanding finish().
+            messages.append({
+                "role": "user",
+                "content": ("You returned content without calling any tool. "
+                            "Call the `finish` tool now with your work_done + state_md + next_md + telegram fields. "
+                            "Nothing else.")
+            })
+            continue
+
+        # Process each tool call in order. If one of them is `finish`, that
+        # short-circuits the loop.
+        finish_payload: dict | None = None
+        for tc in tool_calls:
+            fn = (tc.get("function") or {})
+            name = fn.get("name", "")
+            args = _coerce_args(fn.get("arguments"))
+            tc_id = tc.get("id") or f"call_{len(full_log['tool_calls'])}"
+
+            if name == "finish":
+                finish_payload = args
+                full_log["tool_calls"].append({"id": tc_id, "name": name, "args": args, "result": {"ok": True, "terminator": True}})
+                # Tool response message — Ollama expects it even for finish.
+                messages.append({"role": "tool", "tool_call_id": tc_id, "name": name,
+                                 "content": json.dumps({"ok": True})})
+                continue
+
+            result = execute_tool_call(cfg, paths, name, args)
+            full_log["tool_calls"].append({"id": tc_id, "name": name, "args": args, "result": result})
+            messages.append({"role": "tool", "tool_call_id": tc_id, "name": name,
+                             "content": _truncate_tool_result(result)})
+
+        if finish_payload is not None:
+            return finish_payload, last_meta, full_log["llm_attempts"]
+
+    # Loop cap exhausted without a finish. Synthesise a minimal payload from
+    # whatever the last assistant turn said so we still journal + telegram.
+    last_text = (last_msg.get("content") or "").strip()
+    obj = extract_json(last_text) if last_text else None
+    if obj and obj.get("work_done"):
+        return obj, last_meta, full_log["llm_attempts"]
+    synthesised = {
+        "work_done": (f"tool-loop hit max_iterations={max_iter} without calling finish; "
+                      f"last assistant content: {last_text[:300] if last_text else '<empty>'}"),
+        "tick_mode": "operative",
+        "state_md": read_text(paths.state / "STATE.md"),
+        "next_md": read_text(paths.state / "NEXT.md"),
+        "telegram": "tool-loop exhausted without finish() — see tick payload",
+        "_synthesised": True,
+    }
+    return synthesised, last_meta, full_log["llm_attempts"]
+
+
+# ----------------------- loop detection --------------------------------
+#
+# Replaces the broken model-reported `progress_confidence` (was clamped to 7
+# across 1000+ ticks) with a deterministic check on the journal: if the new
+# work_done text is too similar to recent entries, flag and force generative.
+
+def detect_loop(paths: Paths, current_work_done: str, cfg: dict) -> dict:
+    """Compare current work_done against the last N journal entries.
+    Returns a dict with loop_detected/similar_count/sample for hot context."""
+    from difflib import SequenceMatcher
+    tl = cfg.get("tool_loop") or {}
+    recent_n = int(tl.get("loop_detect_recent", 5))
+    ratio_thr = float(tl.get("loop_detect_ratio", 0.6))
+    count_thr = int(tl.get("loop_detect_count", 3))
+
+    journal = paths.state / "JOURNAL.md"
+    if not journal.exists() or not current_work_done.strip():
+        return {"loop_detected": False, "similar_count": 0, "recent_n": recent_n,
+                "ratio_threshold": ratio_thr, "count_threshold": count_thr}
+    lines = [L for L in journal.read_text(encoding="utf-8").splitlines()
+             if L.strip().startswith("#")][-recent_n:]
+    cur = current_work_done.lower().strip()
+    similar = 0
+    sample: list[str] = []
+    for line in lines:
+        if " — " not in line:
+            continue
+        prev = line.split(" — ", 1)[1].lower().strip()
+        ratio = SequenceMatcher(None, cur, prev).ratio()
+        if ratio >= ratio_thr:
+            similar += 1
+            sample.append(f"{ratio:.2f}: {line[:100]}")
+    return {
+        "loop_detected": similar >= count_thr,
+        "similar_count": similar,
+        "recent_n": recent_n,
+        "ratio_threshold": ratio_thr,
+        "count_threshold": count_thr,
+        "sample": sample,
+    }
+
+
 # ------------------------- file writes (model) -------------------------
 
 def apply_model_files(cfg: dict, paths: Paths, files: list[dict]) -> list[dict]:
@@ -1109,7 +1452,9 @@ def telegram_send(cfg: dict, text: str, thread_id: int | None = None, label: str
 METRIC_FIELDS = [
     "ts", "tick_n", "mode", "wall_s", "provider_used", "model_used",
     "input_tokens_est", "input_tokens", "output_tokens", "output_chars",
-    "progress_confidence",
+    "progress_confidence",     # legacy column — kept empty so old analyse/dashboards still parse
+    "loop_score",              # NEW: similar_count from detect_loop (0..recent_n)
+    "tool_steps",              # NEW: number of non-finish tool calls executed in the tick
     "actions_count", "actions_executed", "actions_queued",
     "parse_ok", "drift_flag", "compact_now", "failures",
 ]
@@ -1202,16 +1547,34 @@ def main() -> int:
         "llm_attempts": [],
         "raw_content": None,
         "parsed_response": None,
+        "tool_calls": [],
+        "loop_detection": None,
         "files_written": [],
         "actions": [],
         "telegram_posts": [],
         "errors": [],
     }
+    obj: dict = {}
 
     try:
         # --- assemble context ---
         requested_notes = read_pending_note_requests(paths)
         user_msg, sizes = assemble_hot_context(cfg, paths, requested_notes, inbox_snap)
+
+        # If last tick fired a loop warning, prepend it so it's the first
+        # thing Mako sees this tick. The file is one-shot — we clear it after
+        # reading so it doesn't keep nagging him.
+        loop_warn_path = paths.state / "loop_warning.md"
+        if loop_warn_path.exists():
+            warn_text = read_text(loop_warn_path).strip()
+            if warn_text:
+                user_msg = (f"## ⚠️ LOOP WARNING (from last tick — read this first)\n\n"
+                            f"{warn_text}\n\n---\n\n") + user_msg
+            try:
+                loop_warn_path.unlink()
+            except OSError:
+                pass
+
         full_log["user_message"] = user_msg
         full_log["sizes"] = sizes
 
@@ -1229,23 +1592,32 @@ def main() -> int:
             raise RuntimeError(f"missing system prompt: {prompt_file}")
         full_log["system_prompt"] = system
 
-        # --- LLM call ---
-        content, meta, prov_failures, attempts = call_llm_with_fallback(cfg, system, user_msg)
-        failures.extend(prov_failures)
-        output_chars = len(content)
-        full_log["llm_attempts"] = attempts
-        full_log["raw_content"] = content
+        # --- LLM run ---
+        if args.mode == "compact":
+            # Compaction is pure summarisation: keep the legacy single-shot
+            # JSON-blob path. No tools needed.
+            content, meta, prov_failures, attempts = call_llm_with_fallback(cfg, system, user_msg)
+            failures.extend(prov_failures)
+            output_chars = len(content)
+            full_log["llm_attempts"] = attempts
+            full_log["raw_content"] = content
+            obj = extract_json(content) or {}
+        else:
+            # Normal tick: drive the in-tick tool-use loop. The model calls
+            # tools (shell, read_file, write_file, http_get, git, cf_api,
+            # telegram_post, ask_chris, request_resource) and sees their
+            # results before deciding the next step. Loop ends when the model
+            # calls the `finish` tool with the final structured payload.
+            obj, meta, attempts = run_tool_loop(cfg, paths, system, user_msg, full_log, t_start)
+            output_chars = len(json.dumps(obj, ensure_ascii=False))
+            # tally tool-call results into action counts so Telegram + metrics
+            # still reflect "what happened this tick".
+            for tc in full_log.get("tool_calls", []):
+                if tc.get("name") in (None, "finish", "<implicit_finish>"):
+                    continue
+                actions_executed += 1
 
-        # --- parse ---
-        obj = extract_json(content)
-        if obj is None:
-            raise RuntimeError("PARSE_ERROR: no JSON object in response")
-        # work_done is mandatory. Empty/missing means the model dropped the
-        # narrative — most likely a schema-heavy tick (compaction, big rewrite)
-        # where it skipped the field. Treat as parse failure so the wrapper
-        # does NOT archive INBOX, does NOT clear the compaction flag, and we
-        # see it as a 🦫 FAIL in Telegram. Otherwise the side-effects land
-        # without Mako acknowledging anything Chris just told him.
+        # --- validate finish payload ---
         wd_check = obj.get("work_done")
         if not (isinstance(wd_check, str) and wd_check.strip()):
             raise RuntimeError("PARSE_ERROR: work_done missing or empty — "
@@ -1260,13 +1632,19 @@ def main() -> int:
             apply_state_md(paths, "NEXT.md", obj["next_md"])
         apply_persona_update(paths, obj.get("persona_update"))
 
-        # --- model-emitted file writes ---
+        # --- legacy: model-emitted file writes (compaction path only;
+        #     tool-use path uses write_file as a tool, not a struct field) ---
         file_results = apply_model_files(cfg, paths, obj.get("files") or [])
         full_log["files_written"] = file_results
 
-        # --- actions ---
+        # --- gated actions queue ---
+        # Tool-use path: gated actions arrive as obj["gated_actions"].
+        # Compaction path: legacy obj["actions"] array (rarely used now).
         action_results: list[dict] = []
-        for a in obj.get("actions") or []:
+        gated_in = obj.get("gated_actions") or obj.get("actions") or []
+        for a in gated_in:
+            if not isinstance(a, dict):
+                continue
             res = dispatch_action(cfg, paths, a)
             action_results.append({"action": a, "result": res})
             if res.get("queued"):
@@ -1276,12 +1654,31 @@ def main() -> int:
         full_log["actions"] = action_results
 
         # --- LAST_RESULTS.md for next tick ---
-        last_results = render_last_results(tick_n, args.mode, file_results, action_results, meta)
+        last_results = render_last_results(tick_n, args.mode, file_results, action_results, meta,
+                                           full_log.get("tool_calls"))
         write_text(paths.state / "LAST_RESULTS.md", last_results)
 
         # --- journal ---
         wd = obj.get("work_done") or "(no work_done)"
         append_journal(paths, tick_n, wd)
+
+        # --- loop detection (after journal append, against now-recent history) ---
+        loop_info = detect_loop(paths, wd, cfg)
+        full_log["loop_detection"] = loop_info
+        if loop_info["loop_detected"]:
+            warn = (f"Your last {loop_info['recent_n']} journal entries are too similar to each "
+                    f"other ({loop_info['similar_count']} matches at ratio ≥ {loop_info['ratio_threshold']:.2f}, "
+                    f"threshold {loop_info['count_threshold']}). You're stuck. This tick MUST be "
+                    f"`tick_mode: generative` — brainstorm 3+ NEW backlog ideas, do NOT continue "
+                    f"the same task. Sample of similar entries:\n"
+                    + "\n".join(f"  - {s}" for s in loop_info.get("sample", [])))
+            write_text(paths.state / "loop_warning.md", warn)
+            try:
+                telegram_send(cfg,
+                              f"⚠️ #{tick_n} loop detected · {loop_info['similar_count']}/{loop_info['recent_n']} similar work_done entries · forcing generative next tick",
+                              thread_id=cfg["telegram"]["log_thread_id"], label="loop_alert")
+            except Exception:
+                pass
 
         # --- requested notes for next tick ---
         write_pending_note_requests(paths, obj.get("request_notes") or [])
@@ -1306,14 +1703,19 @@ def main() -> int:
         if len(tg_text) > tg_cap:
             tg_text = tg_text[:tg_cap - 30].rstrip() + f" …[truncated · {len(tg_text)} chars]"
         wall = round(time.time() - t_start, 2)
+        n_tools = sum(1 for tc in full_log.get("tool_calls", [])
+                      if tc.get("name") not in (None, "finish", "<implicit_finish>"))
         header = (f"🦫 #{tick_n} · {datetime.now().strftime('%H:%M')} · "
-                  f"{wall}s · {meta.get('slot','?')}/{meta.get('model','?')}\n")
+                  f"{wall}s · {meta.get('slot','?')}/{meta.get('model','?')} · "
+                  f"{n_tools}🔧\n")
         body = tg_text
         extra = []
-        if actions_executed or actions_queued:
-            extra.append(f"acts: {actions_executed}✓ {actions_queued}⏸")
+        if actions_queued:
+            extra.append(f"queued: {actions_queued}⏸")
         if drift_flag:
             extra.append(f"drift: {drift_flag[:60]}")
+        if loop_info.get("loop_detected"):
+            extra.append("⚠ loop")
         if extra:
             body = body + "\n" + " · ".join(extra)
         telegram_send(cfg, header + body, thread_id=cfg["telegram"]["log_thread_id"], label="tick")
@@ -1353,7 +1755,9 @@ def main() -> int:
     # Real token counts from the provider response, if available.
     in_tok = meta.get("prompt_eval_count") or (meta.get("usage") or {}).get("prompt_tokens") or ""
     out_tok = meta.get("eval_count") or (meta.get("usage") or {}).get("completion_tokens") or ""
-    confidence = obj.get("progress_confidence", "") if isinstance(obj, dict) else ""
+    tool_steps_n = sum(1 for tc in full_log.get("tool_calls", [])
+                       if tc.get("name") not in (None, "finish", "<implicit_finish>"))
+    loop_score = (full_log.get("loop_detection") or {}).get("similar_count", "")
 
     record_metric(paths, {
         "ts": now_iso(), "tick_n": tick_n, "mode": args.mode,
@@ -1362,8 +1766,10 @@ def main() -> int:
         "input_tokens_est": sizes.get("_total_tokens_est", ""),
         "input_tokens": in_tok, "output_tokens": out_tok,
         "output_chars": output_chars,
-        "progress_confidence": confidence,
-        "actions_count": len((obj.get("actions") or [])),
+        "progress_confidence": "",   # deprecated: model no longer reports
+        "loop_score": loop_score,
+        "tool_steps": tool_steps_n,
+        "actions_count": len((obj.get("gated_actions") or obj.get("actions") or [])),
         "actions_executed": actions_executed,
         "actions_queued": actions_queued,
         "parse_ok": parse_ok,
@@ -1382,13 +1788,70 @@ def main() -> int:
 # --------------------------- last results ------------------------------
 
 def render_last_results(tick_n: int, mode: str, file_results: list[dict],
-                        action_results: list[dict], meta: dict) -> str:
+                        action_results: list[dict], meta: dict,
+                        tool_calls: list[dict] | None = None) -> str:
     lines = [f"# LAST_RESULTS — tick #{tick_n} ({mode}) — {now_iso()}", ""]
     lines.append(f"_provider: {meta.get('slot','?')} / {meta.get('model','?')} · wall {meta.get('wall_s','?')}s_")
     lines.append("")
 
+    # Tool-use loop trace — what the model actually did inside this tick.
+    real_tools = [tc for tc in (tool_calls or [])
+                  if tc.get("name") not in (None, "finish", "<implicit_finish>")]
+    if real_tools:
+        lines.append("## tool-loop trace")
+        for i, tc in enumerate(real_tools, 1):
+            name = tc.get("name", "?")
+            args = tc.get("args") or {}
+            r = tc.get("result") or {}
+            ok = "✅" if r.get("ok") else "❌"
+            head = f"### {i}. {name} · {ok}"
+            lines.append(head)
+            if name == "shell":
+                lines.append(f"cmd: `{str(args.get('cmd',''))[:200]}`  rc={r.get('rc','?')}")
+                if r.get("stdout"):
+                    lines.append("stdout:\n```\n" + r["stdout"] + "\n```")
+                if r.get("stderr"):
+                    lines.append("stderr:\n```\n" + r["stderr"] + "\n```")
+                if not r.get("ok") and r.get("error"):
+                    lines.append(f"error: {r['error']}")
+            elif name == "http_get":
+                lines.append(f"url: {str(args.get('url',''))[:200]}  status={r.get('status','?')}  size={r.get('size_bytes','?')}B")
+                if r.get("body"):
+                    lines.append("body:\n```\n" + r["body"] + "\n```")
+                if not r.get("ok") and r.get("error"):
+                    lines.append(f"error: {r['error']}")
+            elif name == "read_file":
+                if r.get("ok"):
+                    lines.append(f"path: {r.get('path','?')}")
+                    if r.get("body") is not None:
+                        lines.append("body:\n```\n" + r["body"] + "\n```")
+                else:
+                    lines.append(f"error: {r.get('error','?')}")
+            elif name == "write_file":
+                if r.get("ok"):
+                    lines.append(f"wrote: {r.get('path','?')} ({r.get('bytes','?')}B, {r.get('mode','write')})")
+                else:
+                    lines.append(f"error: {r.get('error','?')}")
+            elif name == "git":
+                lines.append(f"cmd: git {str(args.get('cmd',''))[:200]}  rc={r.get('rc','?')}")
+                if r.get("stdout"):
+                    lines.append("stdout:\n```\n" + r["stdout"] + "\n```")
+                if r.get("stderr"):
+                    lines.append("stderr:\n```\n" + r["stderr"] + "\n```")
+            elif name == "cf_api":
+                lines.append(f"{args.get('method','?')} {args.get('path','?')}  status={r.get('status','?')}")
+                if r.get("body"):
+                    lines.append("body:\n```\n" + str(r["body"])[:600] + "\n```")
+            elif name in ("telegram_post", "ask_chris"):
+                lines.append("delivered" if r.get("ok") else f"failed: {r.get('error','?')}")
+            elif name == "request_resource":
+                lines.append(f"queued resource request id={r.get('id','?')}")
+            else:
+                lines.append("```json\n" + json.dumps(r, ensure_ascii=False)[:400] + "\n```")
+            lines.append("")
+
     if file_results:
-        lines.append("## file writes")
+        lines.append("## file writes (legacy)")
         for r in file_results:
             if r.get("ok"):
                 lines.append(f"- ✅ {r['path']} ({r['bytes']}B, {r['mode']})")
@@ -1397,7 +1860,7 @@ def render_last_results(tick_n: int, mode: str, file_results: list[dict],
         lines.append("")
 
     if action_results:
-        lines.append("## actions")
+        lines.append("## gated/queued actions")
         for i, item in enumerate(action_results, 1):
             a, r = item["action"], item["result"]
             t = a.get("type", "?")
@@ -1441,8 +1904,8 @@ def render_last_results(tick_n: int, mode: str, file_results: list[dict],
             else:
                 lines.append("```json\n" + json.dumps(r, ensure_ascii=False)[:400] + "\n```")
             lines.append("")
-    else:
-        lines.append("_no actions emitted_")
+    elif not real_tools and not file_results:
+        lines.append("_no actions emitted, no tools used_")
     return "\n".join(lines) + "\n"
 
 

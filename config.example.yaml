@@ -13,40 +13,54 @@ paths:
   prompts: /srv/mako-zero/prompts
 
 llm:
+  # Both slots use Ollama Cloud — same key, different models. The fallback
+  # only fires if primary times out or returns an error. Both must be models
+  # that support native tool-calling (structured `tool_calls` field), since
+  # the worker tick now runs as an in-tick tool-use loop.
   primary:
     type: ollama
     base_url: https://ollama.com
-    api_key: ""               # OLLAMA Cloud key
-    model: qwen3.5            # general-purpose, non-thinking, fast
-    timeout_s: 180
-    num_predict: 16000        # output token cap. 16K ≈ 64KB of response.
-                              # Lower → file writes get truncated mid-content.
-                              # Above 32K → quality degrades on most non-thinking models.
+    api_key: ""               # Ollama Cloud key
+    model: gpt-oss:120b       # OpenAI open-weights, native thinking + tool calls, fast (~3s tiny prompts)
+    timeout_s: 60             # per-step timeout inside the tool loop
+    num_predict: 16000
   fallback:
-    type: openai_compat
-    base_url: https://opencode.ai/zen/go/v1
-    api_key: ""               # OpenCode Go key (sk-...)
-    model: qwen3.6            # same family for voice consistency
-    timeout_s: 120
-    num_predict: 12000
+    type: ollama
+    base_url: https://ollama.com
+    api_key: ""               # same Ollama Cloud key
+    model: kimi-k2-thinking   # Moonshot reasoning model, native tool calls, slower but solid
+    timeout_s: 60
+    num_predict: 16000
 
 context:
-  max_input_tokens: 18000     # heuristic: 4 chars/token
-  recent_journal_lines: 20
-  max_requested_notes: 3
+  max_input_tokens: 80000     # gpt-oss & kimi both have 128K+ windows; we use the room
+  recent_journal_lines: 60    # was 20 — bigger working memory across ticks
+  max_requested_notes: 5      # was 3
 
 tick:
   shell_timeout_s: 30
   http_timeout_s: 30
   http_response_max_bytes: 8192
   shell_output_max_bytes: 4096
-  compact_every_n_ticks: 50
+  compact_every_n_ticks: 100  # was 50 — JOURNAL was getting compacted too eagerly
   approval_threshold_pence: 200
   budget_ceiling_pence_month: 10000  # £100/mo
   telegram_summary_max_chars: 1000   # per-tick Telegram log message cap
                                      # (Telegram itself caps at 4096; this is
                                      #  our soft cap so blow-by-blows stay punchy.
                                      #  Bump for verbose runs, lower for quieter.)
+
+# In-tick tool-use loop: the model can call shell / read_file / write_file /
+# http_get / git / cf_api / telegram_post / ask_chris / request_resource as
+# tools and see results before deciding next step. Loop terminates when the
+# model calls the `finish` tool (or content with no tool_calls) or hits the
+# iteration cap.
+tool_loop:
+  max_iterations: 8           # hard cap on LLM round-trips per tick
+  soft_deadline_s: 240        # if elapsed > this, force the model to finish next call
+  loop_detect_recent: 5       # compare new work_done against last N journal entries
+  loop_detect_ratio: 0.6      # SequenceMatcher ratio threshold — 0.6 = "very similar"
+  loop_detect_count: 3        # if N+ recent entries are similar → flag + force generative
 
 telegram:
   bot_token: ""
@@ -79,12 +93,13 @@ digest:
   hours_window: 24             # how far back to summarise
 
 supervisor:
-  tick_interval_s: 300         # 5 min — gap between END of one tick and START of next
+  tick_interval_s: 180         # 3 min — gap between END of one tick and START of next
+                               # (was 120; the new tool-loop ticks are deeper, lower-frequency)
   digest_hour_local: 8
-  tick_timeout_s: 300          # hard ceiling per tick subprocess
+  tick_timeout_s: 480          # 8 min hard ceiling — was 300; tool-loop needs room
   digest_timeout_s: 60
   scribe_interval_s: 7200      # 2 hours — scribe runs between worker ticks
-  scribe_timeout_s: 240        # writing-heavy, can be slower than worker tick
+  scribe_timeout_s: 360        # writing-heavy, can be slower than worker tick
   meta_interval_s: 1800        # 30 min — meta loop cadence (when enabled)
   meta_timeout_s: 720          # codex can be slow — 12 min ceiling
 
