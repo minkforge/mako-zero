@@ -561,16 +561,26 @@ def compute_availability(cfg: dict) -> dict:
 
 
 def call_chat_with_fallback(cfg: dict, messages: list[dict],
-                            tools: list[dict] | None = None) -> tuple[dict, dict, list[str], list[dict]]:
-    """Run a single chat round-trip across primary → fallback.
+                            tools: list[dict] | None = None,
+                            preferred_slot: str = "primary") -> tuple[dict, dict, list[str], list[dict]]:
+    """Run a single chat round-trip across the two slots, trying preferred first.
 
     Returns (assistant_message, meta, failure_strings, attempt_records).
     Used by the worker tick's tool-use loop (one round per loop iteration)
-    and indirectly by scribe/digest via the legacy wrapper below."""
+    and indirectly by scribe/digest via the legacy wrapper below.
+
+    `preferred_slot` lets the tool-loop pin to whichever slot last succeeded
+    in this tick — once primary times out we don't want to keep paying its
+    timeout on every subsequent iteration."""
     failures: list[str] = []
     attempts: list[dict] = []
     specs = {slot: dict(cfg["llm"][slot]) for slot in ("primary", "fallback")}
-    for slot in ("primary", "fallback"):
+    # Build slot order with preferred first.
+    if preferred_slot == "fallback":
+        order = ("fallback", "primary")
+    else:
+        order = ("primary", "fallback")
+    for slot in order:
         spec = specs[slot]
         if not spec.get("base_url") or not spec.get("model"):
             failures.append(f"{slot}: not configured")
@@ -1243,6 +1253,10 @@ def run_tool_loop(cfg: dict, paths: Paths, system: str, user_msg: str,
     full_log["tool_calls"] = []
     last_meta: dict = {}
     last_msg: dict = {}
+    # Sticky-slot failover: once a slot fails inside this tick, keep using
+    # whatever last succeeded for the remaining iterations. Without this we'd
+    # eat the primary timeout on every iteration when primary is broken.
+    preferred_slot = "primary"
 
     for step in range(max_iter):
         steps_remaining = max_iter - step  # current step is included
@@ -1265,18 +1279,28 @@ def run_tool_loop(cfg: dict, paths: Paths, system: str, user_msg: str,
                             f"Wrap up in the next 1-2 calls — call finish soon.")
             })
 
-        msg, meta, _failures, attempts_round = call_chat_with_fallback(cfg, messages, tools)
+        msg, meta, _failures, attempts_round = call_chat_with_fallback(
+            cfg, messages, tools, preferred_slot=preferred_slot)
+        # Pin the slot that just succeeded for next iteration.
+        preferred_slot = meta.get("slot", preferred_slot)
         full_log["llm_attempts"].extend(attempts_round)
         last_meta = meta
         last_msg = msg
 
-        # Persist the assistant turn into the conversation. Strip any thinking
-        # field — Ollama's tool calls already encode the decision.
+        # Persist the assistant turn into the conversation. Pass through
+        # provider-specific reasoning fields — DeepSeek (via OpenCode) hard-
+        # rejects with HTTP 400 if `reasoning_content` from a prior turn
+        # isn't echoed back; Ollama is lenient about `thinking` but we
+        # round-trip it anyway for symmetry.
         assistant_turn: dict = {"role": "assistant"}
         if msg.get("content"):
             assistant_turn["content"] = msg["content"]
         if msg.get("tool_calls"):
             assistant_turn["tool_calls"] = msg["tool_calls"]
+        if msg.get("reasoning_content"):
+            assistant_turn["reasoning_content"] = msg["reasoning_content"]
+        if msg.get("thinking"):
+            assistant_turn["thinking"] = msg["thinking"]
         messages.append(assistant_turn)
 
         tool_calls = msg.get("tool_calls") or []
@@ -1405,11 +1429,20 @@ def apply_state_md(paths: Paths, key: str, content: str) -> None:
     write_text(target, content if content.endswith("\n") else content + "\n")
 
 
-def apply_persona_update(paths: Paths, upd: dict | None) -> None:
-    if not upd or upd.get("mode") == "skip":
+def apply_persona_update(paths: Paths, upd) -> None:
+    # Defensive: some models emit persona_update as a bare string (the content)
+    # instead of the {mode, content} dict the schema asks for. Treat that as
+    # mode=append. Anything else non-dict → skip.
+    if upd is None:
+        return
+    if isinstance(upd, str):
+        upd = {"mode": "append", "content": upd}
+    if not isinstance(upd, dict):
+        return
+    if upd.get("mode") == "skip":
         return
     content = upd.get("content") or ""
-    if not content.strip():
+    if not isinstance(content, str) or not content.strip():
         return
     p = paths.state / "PERSONA.md"
     if upd.get("mode") == "append":

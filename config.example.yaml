@@ -25,11 +25,17 @@ llm:
     timeout_s: 60             # per-step timeout inside the tool loop
     num_predict: 16000
   fallback:
-    type: ollama
-    base_url: https://ollama.com
-    api_key: ""               # same Ollama Cloud key
-    model: kimi-k2-thinking   # Moonshot reasoning model, native tool calls, slower but solid
-    timeout_s: 60
+    # OpenCode used as fallback for vendor diversity (only fires when Ollama
+    # primary errors/times out; sticky-slot in tick.py pins to whichever slot
+    # last succeeded, so we don't re-pay primary's timeout per loop iteration).
+    # Avoid qwen3.5-plus on this provider — Alibaba quota permanently exhausted.
+    # deepseek-v4-flash: ~2-40s per call on real prompts, native tool_calls,
+    # supports OpenAI-compat reasoning_content (which we now echo back).
+    type: openai_compat
+    base_url: https://opencode.ai/zen/go/v1
+    api_key: ""               # OpenCode Go key (sk-...)
+    model: deepseek-v4-flash
+    timeout_s: 240            # OpenCode is much slower than Ollama Cloud on big prompts
     num_predict: 16000
 
 context:
