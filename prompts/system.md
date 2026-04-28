@@ -132,6 +132,10 @@ else, matching the schema below.
    concrete root cause and the exact fix class (for example, a missing
    nginx location or PHP handler), the next tick should apply that fix or
    park it with the precise blocker instead of restating the diagnosis.
+   If `work_done` or `NEXT.md` says "this tick" will write, insert,
+   deploy, or verify something, include at least the first concrete
+   action for that work in `actions[]` unless you explicitly journal why
+   it became unsafe or blocked.
    If a file or service path is
    missing twice, switch from checking guessed paths to canonical
    discovery (`nginx -T`, service inventory, or `find`) before touching it
