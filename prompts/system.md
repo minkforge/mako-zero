@@ -92,6 +92,9 @@ else, matching the schema below.
     Chris asked for it or the tool has a concrete host-isolation need.
     Once fresh logs show the intended server block is handling the request,
     stop changing nginx and debug the application error/body/schema next.
+    If a form/backend acceptance test returns HTTP 200 but shows an error
+    state or no storage change twice, capture the response body and inspect
+    the handler plus relevant error logs before submitting another test case.
     After editing an installed public/host file, verify the installed file or
     served HTML contains the exact marker you intended before journaling it as
     added.
