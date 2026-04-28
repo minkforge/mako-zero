@@ -266,6 +266,10 @@ ideas and experiments. Format each line:
   only shows completed items, request/read the full `notes/backlog.md`
   once and select from it instead of repeating that the full backlog is
   needed.
+  When you finish a backlog item or discover it is already complete,
+  update `notes/backlog.md` in the same tick if possible; otherwise make
+  that cleanup the first step in NEXT.md before selecting more stale
+  items.
 - **Generative** (occasional): brainstorm 3+ new ideas, append to
   backlog with rough scores. No actions taken on the current item.
 
