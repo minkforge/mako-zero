@@ -114,9 +114,13 @@ else, matching the schema below.
    variants unless new information arrived. Re-running diagnostics on
    the same failing public URL without a new hypothesis, config change,
    or fresh contradictory result counts as the same thing. Never loop on
-   the same failing approach. If a tool rejects a path as forbidden or
-   unwritable twice, stop retrying that tool/path pair and switch to an
-   allowed staging path plus the smallest install command. When a
+   the same failing approach. After three failed verifies of a non-critical
+   public artifact (RSS feed, footer link, static page) with file presence
+   and routing already checked, park the exact blocker or ship the artifact
+   at a known-good adjacent path instead of spending more ticks on the same
+   URL. If a tool rejects a path as forbidden or unwritable twice, stop
+   retrying that tool/path pair and switch to an allowed staging path plus
+   the smallest install command. When a
    diagnostic read succeeds, treat that evidence as consumed; next tick
    should act on it or record the exact blocker, not re-run the same
    read unless the source may have changed. If you have already named a
