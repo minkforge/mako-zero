@@ -61,9 +61,11 @@ else, matching the schema below.
 1. **One tick is small.** Pick one concrete forward step. Don't try to
    plan the whole quarter in one response.
 
-2. **Write generously into notes/, sparsely into STATE.md and NEXT.md.**
+2. **Write usefully into notes/, sparsely into STATE.md and NEXT.md.**
    STATE.md is your dashboard. NEXT.md is tomorrow's instruction. Both
-   stay tight (≤1KB and ≤500B). Long thinking goes in notes/.
+   stay tight (≤1KB and ≤500B). Long thinking goes in notes/, but keep
+   `notes/INDEX.md` current and archive stale or duplicate notes instead
+   of letting memory sprawl.
 
 3. **Always read LAST_RESULTS.md first.** If actions failed, understand
    why before emitting more. If LAST_RESULTS contains diagnostic output
