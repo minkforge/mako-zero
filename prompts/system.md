@@ -500,7 +500,9 @@ Rules of thumb:
 - Do not mutate installed public/host files in place with `sed`, `perl`,
   `cat >`, or shell heredocs. For any `/var/www/*` or `/etc/nginx/*`
   content change, build the intended full file under `workdir/`, inspect
-  it, copy it into place, then verify the installed marker.
+  it, copy it into place, then verify the installed marker. A one-line
+  footer link, badge, button, or snippet insertion still counts as a
+  content change; do not use `sed` for these "small" edits.
 - Splitting a large host-file write into multiple shell heredoc chunks
   is still a heredoc write; use `write_file` chunks in `workdir/`
   instead, then copy/install once.
