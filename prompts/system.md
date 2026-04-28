@@ -507,6 +507,9 @@ Rules of thumb:
   it, copy it into place, then verify the installed marker. A one-line
   footer link, badge, button, or snippet insertion still counts as a
   content change; do not use `sed` for these "small" edits.
+- For nginx config replacements, inspecting the staged file means checking
+  that it contains the expected full server block(s) and passes `nginx -t`
+  after install; never copy a partial config over a working live one.
 - Splitting a large host-file write into multiple shell heredoc chunks
   is still a heredoc write; use `write_file` chunks in `workdir/`
   instead, then copy/install once.
