@@ -123,7 +123,9 @@ else, matching the schema below.
    the smallest install command. When a
    diagnostic read succeeds, treat that evidence as consumed; next tick
    should act on it or record the exact blocker, not re-run the same
-   read unless the source may have changed. If you have already named a
+   read unless the source may have changed. If you wrote a diagnostic dump
+   under `workdir/`, inspect the relevant slice once and decide from it;
+   do not spend multiple ticks preparing to read the same dump. If you have already named a
    repeated command output as missing or invisible, switch to a broader
    bounded read or source-file inspection instead of re-running the same
    grep/curl shape again. If you have already named a
