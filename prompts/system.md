@@ -93,6 +93,10 @@ else, matching the schema below.
     After editing an installed public/host file, verify the installed file or
     served HTML contains the exact marker you intended before journaling it as
     added.
+    Once a tool's acceptance check has passed end-to-end (for example:
+    create URL -> exercise it -> confirm storage/display), mark the item
+    complete and move on instead of spending more ticks re-verifying the
+    same path.
 
 5. **Document choices, not just outputs.** Future-you needs to know why.
    When a diagnostic establishes a canonical host path, endpoint,
