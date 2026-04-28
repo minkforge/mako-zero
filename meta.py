@@ -90,7 +90,11 @@ def metrics_summary(logs: Path, n: int = 50) -> str:
     if not rows:
         return "(metrics.csv empty)"
     parse_ok = sum(1 for r in rows if r.get("parse_ok") == "True")
-    no_actions = sum(1 for r in rows if (r.get("actions_count") or "0") in ("0", ""))
+    no_actions = sum(
+        1 for r in rows
+        if (r.get("actions_count") or "0") in ("0", "")
+        and (r.get("tool_steps") or "0") in ("0", "")
+    )
     walls = [float(r["wall_s"]) for r in rows if r.get("wall_s")]
     drifts = [r.get("drift_flag", "") for r in rows if r.get("drift_flag")]
     summary = [
@@ -101,13 +105,13 @@ def metrics_summary(logs: Path, n: int = 50) -> str:
         f"drift flags raised: {len([d for d in drifts if d])}",
         "",
         "## raw rows (newest first)",
-        "ts,tick,mode,wall,provider,parse_ok,actions,queued,drift",
+        "ts,tick,mode,wall,provider,parse_ok,tools,actions,queued,drift",
     ]
     for r in reversed(rows):
         summary.append(",".join([
             r.get("ts", ""), r.get("tick_n", ""), r.get("mode", ""),
             r.get("wall_s", ""), r.get("provider_used", ""),
-            r.get("parse_ok", ""), r.get("actions_count", ""),
+            r.get("parse_ok", ""), r.get("tool_steps", ""), r.get("actions_count", ""),
             r.get("actions_queued", ""), (r.get("drift_flag") or "")[:30],
         ]))
     return "\n".join(summary)
